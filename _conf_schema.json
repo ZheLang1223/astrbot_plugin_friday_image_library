@@ -1,0 +1,32 @@
+{
+  "default_category": {
+    "description": "默认分类名",
+    "type": "string",
+    "default": "默认",
+    "hint": "用户上传时不填写分类，或需要兜底分类时使用。"
+  },
+  "allowed_extensions": {
+    "description": "允许的图片格式",
+    "type": "list",
+    "default": ["jpg", "jpeg", "png", "gif", "webp"],
+    "hint": "仅填写扩展名，不需要点号。"
+  },
+  "max_image_size_mb": {
+    "description": "单张图片大小上限 MB",
+    "type": "int",
+    "default": 20,
+    "hint": "上传超过此大小的图片会被拒绝。"
+  },
+  "recent_window": {
+    "description": "会话内随机去重窗口",
+    "type": "int",
+    "default": 20,
+    "hint": "同一个群或私聊最近发送过的图片会优先避开；设为 0 表示纯随机。"
+  },
+  "upload_receipt": {
+    "description": "上传后发送回执",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后，上传成功时不额外回复；错误和重复仍会提示。"
+  }
+}

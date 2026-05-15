@@ -1,0 +1,9 @@
+name: astrbot_plugin_friday_image_library
+display_name: Friday 本地图库
+desc: 通过 QQ 斜杠指令和 AstrBot WebUI 管理本地图片库，支持敏感图旋转副本发送。
+short_desc: QQ 本地图库随机发送、上传和 Web 管理。
+version: v1.2.0
+author: zhelang
+repo: ""
+support_platforms:
+  - aiocqhttp

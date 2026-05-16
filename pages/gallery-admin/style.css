@@ -34,8 +34,13 @@ button:hover {
   background: #eef3ff;
 }
 
+button.danger {
+  border-color: #f2b4b4;
+  color: #a12727;
+}
+
 .shell {
-  max-width: 1280px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -88,18 +93,19 @@ p {
 }
 
 .controls {
-  align-items: center;
+  align-items: stretch;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(140px, 180px) minmax(120px, 160px) minmax(320px, 520px);
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, 190px) minmax(120px, 160px) minmax(380px, 560px);
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .controls input,
 .controls select,
 .editor input,
 .editor select,
-.editor textarea {
+.editor textarea,
+.bulk-bar select {
   border: 1px solid #cfd6e4;
   border-radius: 6px;
   padding: 8px 10px;
@@ -108,8 +114,54 @@ p {
 
 .upload {
   display: grid;
-  grid-template-columns: 120px 1fr auto;
+  grid-template-columns: 120px minmax(180px, 1fr) auto;
   gap: 8px;
+}
+
+.drop-zone {
+  align-items: center;
+  border: 1px dashed #aab8d0;
+  border-radius: 6px;
+  color: #65728a;
+  cursor: pointer;
+  display: flex;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.drop-zone.dragging {
+  background: #eef3ff;
+  border-color: #5576d1;
+  color: #3151a3;
+}
+
+.drop-zone input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.bulk-bar {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dfe5f0;
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.bulk-bar strong {
+  font-size: 18px;
+}
+
+.bulk-bar select {
+  max-width: 180px;
 }
 
 .grid {
@@ -123,6 +175,24 @@ p {
   border: 1px solid #dfe5f0;
   border-radius: 8px;
   overflow: hidden;
+  position: relative;
+}
+
+.card.selected {
+  border-color: #5576d1;
+  box-shadow: 0 0 0 2px rgb(85 118 209 / 0.18);
+}
+
+.select-box {
+  left: 8px;
+  position: absolute;
+  top: 8px;
+  z-index: 2;
+}
+
+.select-box input {
+  height: 18px;
+  width: 18px;
 }
 
 .thumb {
@@ -147,12 +217,14 @@ p {
   font-size: 15px;
   line-height: 1.35;
   margin: 0 0 8px;
+  overflow-wrap: anywhere;
 }
 
 .meta {
   color: #65728a;
   font-size: 12px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .tags {
@@ -184,6 +256,10 @@ p {
   grid-column: 1 / -1;
   padding: 32px;
   text-align: center;
+}
+
+.sentinel {
+  height: 32px;
 }
 
 dialog {
@@ -234,7 +310,7 @@ dialog::backdrop {
   padding: 4px 10px;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 940px) {
   .stats,
   .controls {
     grid-template-columns: 1fr 1fr;
@@ -242,6 +318,11 @@ dialog::backdrop {
 
   .upload {
     grid-column: 1 / -1;
+  }
+
+  .bulk-bar {
+    align-items: stretch;
+    flex-wrap: wrap;
   }
 }
 
@@ -260,5 +341,11 @@ dialog::backdrop {
   .controls,
   .upload {
     grid-template-columns: 1fr;
+  }
+
+  .bulk-bar select,
+  .bulk-bar button {
+    flex: 1 1 100%;
+    max-width: none;
   }
 }

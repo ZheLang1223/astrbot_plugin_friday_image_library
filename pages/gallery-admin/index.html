@@ -23,7 +23,7 @@
         <div><strong id="stat-latest">-</strong><span>最近上传</span></div>
       </section>
 
-      <section class="controls">
+      <section class="controls" aria-label="筛选和上传">
         <input id="search" type="search" placeholder="搜索标题、描述、标签、ID" />
         <select id="category"></select>
         <select id="safety-status">
@@ -34,12 +34,35 @@
         </select>
         <form id="upload-form" class="upload">
           <input id="upload-category" type="text" placeholder="上传分类" />
-          <input id="upload-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" />
+          <label id="drop-zone" class="drop-zone" for="upload-file">
+            <input id="upload-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple />
+            <span>拖拽图片到这里，或点击选择</span>
+          </label>
           <button type="submit">上传</button>
         </form>
       </section>
 
+      <section id="bulk-bar" class="bulk-bar" hidden>
+        <strong id="selected-count">0</strong>
+        <span>已选择</span>
+        <select id="bulk-safety-status">
+          <option value="">敏感状态</option>
+          <option value="normal">正常</option>
+          <option value="sensitive">敏感</option>
+          <option value="hidden">隐藏</option>
+        </select>
+        <select id="bulk-send-transform">
+          <option value="">发送变换</option>
+          <option value="none">不变换</option>
+          <option value="rotate_180">旋转 180 度</option>
+        </select>
+        <button id="bulk-apply" type="button">应用</button>
+        <button id="bulk-delete" type="button" class="danger">删除</button>
+        <button id="bulk-clear" type="button">取消选择</button>
+      </section>
+
       <section id="grid" class="grid" aria-label="图片列表"></section>
+      <div id="sentinel" class="sentinel" aria-hidden="true"></div>
 
       <dialog id="editor">
         <form method="dialog" class="editor">

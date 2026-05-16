@@ -1,9 +1,15 @@
 const bridge = window.AstrBotPluginPage;
 
+const PAGE_SIZE = 60;
+
 const state = {
   images: [],
   categories: [],
+  selected: new Set(),
   editing: null,
+  offset: 0,
+  hasMore: true,
+  loading: false,
 };
 
 const els = {
@@ -17,9 +23,18 @@ const els = {
   category: document.getElementById("category"),
   safetyStatus: document.getElementById("safety-status"),
   grid: document.getElementById("grid"),
+  sentinel: document.getElementById("sentinel"),
   uploadForm: document.getElementById("upload-form"),
   uploadCategory: document.getElementById("upload-category"),
   uploadFile: document.getElementById("upload-file"),
+  dropZone: document.getElementById("drop-zone"),
+  bulkBar: document.getElementById("bulk-bar"),
+  selectedCount: document.getElementById("selected-count"),
+  bulkSafetyStatus: document.getElementById("bulk-safety-status"),
+  bulkSendTransform: document.getElementById("bulk-send-transform"),
+  bulkApply: document.getElementById("bulk-apply"),
+  bulkDelete: document.getElementById("bulk-delete"),
+  bulkClear: document.getElementById("bulk-clear"),
   editor: document.getElementById("editor"),
   closeEditor: document.getElementById("close-editor"),
   saveEditor: document.getElementById("save-editor"),
@@ -33,26 +48,46 @@ const els = {
 };
 
 await bridge.ready();
+bindEvents();
 await loadAll();
 
-els.refresh.addEventListener("click", loadAll);
-els.search.addEventListener("input", debounce(loadImages, 250));
-els.category.addEventListener("change", loadImages);
-els.safetyStatus.addEventListener("change", loadImages);
-els.closeEditor.addEventListener("click", () => els.editor.close());
-els.saveEditor.addEventListener("click", saveEditor);
-els.uploadForm.addEventListener("submit", uploadImage);
-els.editSafetyStatus.addEventListener("change", () => {
-  if (els.editSafetyStatus.value === "sensitive" && els.editSendTransform.value === "none") {
-    els.editSendTransform.value = "rotate_180";
-  }
-});
+function bindEvents() {
+  els.refresh.addEventListener("click", loadAll);
+  els.search.addEventListener("input", debounce(() => loadImages({ reset: true }), 250));
+  els.category.addEventListener("change", () => loadImages({ reset: true }));
+  els.safetyStatus.addEventListener("change", () => loadImages({ reset: true }));
+  els.closeEditor.addEventListener("click", () => els.editor.close());
+  els.saveEditor.addEventListener("click", saveEditor);
+  els.uploadForm.addEventListener("submit", uploadSelectedFiles);
+  els.uploadFile.addEventListener("change", () => {
+    const count = els.uploadFile.files.length;
+    setStatus(count ? `已选择 ${count} 个文件` : "未选择文件");
+  });
+  els.dropZone.addEventListener("dragover", onDragOver);
+  els.dropZone.addEventListener("dragleave", onDragLeave);
+  els.dropZone.addEventListener("drop", uploadDroppedFiles);
+  els.bulkApply.addEventListener("click", applyBulkUpdate);
+  els.bulkDelete.addEventListener("click", deleteSelected);
+  els.bulkClear.addEventListener("click", clearSelection);
+  els.editSafetyStatus.addEventListener("change", () => {
+    if (els.editSafetyStatus.value === "sensitive" && els.editSendTransform.value === "none") {
+      els.editSendTransform.value = "rotate_180";
+    }
+  });
+
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      loadImages();
+    }
+  });
+  observer.observe(els.sentinel);
+}
 
 async function loadAll() {
   setStatus("正在加载...");
   try {
     await Promise.all([loadStats(), loadCategories()]);
-    await loadImages();
+    await loadImages({ reset: true });
     setStatus("已同步");
   } catch (error) {
     setStatus(error.message || String(error));
@@ -77,24 +112,48 @@ async function loadCategories() {
   els.category.innerHTML = `<option value="">全部分类</option>`;
   for (const item of state.categories) {
     const option = document.createElement("option");
-    option.value = item.category;
+    option.value = item.slug || item.category;
     option.textContent = `${item.category} (${item.image_count})`;
     els.category.appendChild(option);
   }
   els.category.value = current;
 }
 
-async function loadImages() {
-  const params = {
-    query: els.search.value.trim(),
-    category: els.category.value,
-    safety_status: els.safetyStatus.value,
-    limit: 120,
-  };
-  const result = await bridge.apiGet("images", params);
-  assertOk(result);
-  state.images = result.data || [];
-  renderImages();
+async function loadImages({ reset = false } = {}) {
+  if (state.loading || (!state.hasMore && !reset)) {
+    return;
+  }
+  if (reset) {
+    state.images = [];
+    state.offset = 0;
+    state.hasMore = true;
+    state.selected.clear();
+    renderImages();
+    renderBulkBar();
+  }
+  state.loading = true;
+  setStatus("正在加载图片...");
+  try {
+    const params = {
+      query: els.search.value.trim(),
+      category: els.category.value,
+      safety_status: els.safetyStatus.value,
+      limit: PAGE_SIZE,
+      offset: state.offset,
+    };
+    const result = await bridge.apiGet("images", params);
+    assertOk(result);
+    const items = result.data || [];
+    state.images.push(...items);
+    state.offset += items.length;
+    state.hasMore = items.length === PAGE_SIZE;
+    renderImages();
+    setStatus(state.hasMore ? "继续向下滚动加载" : "已加载全部");
+  } catch (error) {
+    setStatus(error.message || String(error));
+  } finally {
+    state.loading = false;
+  }
 }
 
 function renderImages() {
@@ -102,27 +161,94 @@ function renderImages() {
   if (state.images.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "暂无图片。可以使用 /friupload 分类名，或在这里选择分类和文件上传。";
+    empty.textContent = "暂无图片。可以使用 /friup 分类名，或在这里选择分类和文件上传。";
     els.grid.appendChild(empty);
     return;
   }
   for (const image of state.images) {
     const card = document.createElement("article");
-    card.className = "card";
+    card.className = `card${state.selected.has(image.id) ? " selected" : ""}`;
     card.innerHTML = `
+      <label class="select-box">
+        <input type="checkbox" data-select="${escapeAttr(image.id)}" ${state.selected.has(image.id) ? "checked" : ""} />
+      </label>
       <div class="thumb"><img alt="" loading="lazy" src="${escapeAttr(image.preview_url)}"></div>
       <div class="body">
         <h3>${escapeHtml(image.title || image.short_id)}</h3>
-        <div class="meta">分类：${escapeHtml(image.category)} · ${safetyLabel(image.safety_status)} · ${transformLabel(image.send_transform)} · 发送 ${image.send_count || 0} 次</div>
-        <div class="meta">ID：${escapeHtml(image.short_id)}</div>
+        <div class="meta">分类：${escapeHtml(image.category_display_name || image.category)} · ${safetyLabel(image.safety_status)} · ${transformLabel(image.send_transform)} · 发送 ${image.send_count || 0} 次</div>
+        <div class="meta">ID：${escapeHtml(image.short_id)} · ${escapeHtml(image.category_slug || "")}</div>
         <div class="tags">${renderTags(image.tags)}</div>
         <div class="meta">${escapeHtml(image.description || "未填写描述")}</div>
         <footer><button type="button" data-edit="${escapeAttr(image.id)}">编辑</button></footer>
       </div>
     `;
     card.querySelector("[data-edit]").addEventListener("click", () => openEditor(image));
+    card.querySelector("[data-select]").addEventListener("change", (event) => {
+      if (event.target.checked) {
+        state.selected.add(image.id);
+      } else {
+        state.selected.delete(image.id);
+      }
+      renderBulkBar();
+      card.classList.toggle("selected", event.target.checked);
+    });
     els.grid.appendChild(card);
   }
+}
+
+function renderBulkBar() {
+  const count = state.selected.size;
+  els.bulkBar.hidden = count === 0;
+  els.selectedCount.textContent = String(count);
+}
+
+function clearSelection() {
+  state.selected.clear();
+  renderImages();
+  renderBulkBar();
+}
+
+async function applyBulkUpdate() {
+  const updates = {};
+  if (els.bulkSafetyStatus.value) {
+    updates.safety_status = els.bulkSafetyStatus.value;
+  }
+  if (els.bulkSendTransform.value) {
+    updates.send_transform = els.bulkSendTransform.value;
+  }
+  if (updates.safety_status === "sensitive" && !updates.send_transform) {
+    updates.send_transform = "rotate_180";
+  }
+  if (Object.keys(updates).length === 0) {
+    setStatus("请选择要批量修改的字段。");
+    return;
+  }
+  setStatus("正在批量更新...");
+  const result = await bridge.apiPost("image/batch-update", {
+    ids: Array.from(state.selected),
+    updates,
+  });
+  assertOk(result);
+  await Promise.all([loadStats(), loadCategories()]);
+  await loadImages({ reset: true });
+  const failed = result.data.failed?.length || 0;
+  setStatus(`已更新 ${result.data.updated || 0} 张${failed ? `，失败 ${failed} 张` : ""}`);
+}
+
+async function deleteSelected() {
+  if (!window.confirm(`确认删除 ${state.selected.size} 张图片？`)) {
+    return;
+  }
+  setStatus("正在删除...");
+  const result = await bridge.apiPost("image/batch-delete", {
+    ids: Array.from(state.selected),
+  });
+  assertOk(result);
+  clearSelection();
+  await Promise.all([loadStats(), loadCategories()]);
+  await loadImages({ reset: true });
+  const failed = result.data.failed?.length || 0;
+  setStatus(`已删除 ${result.data.deleted || 0} 张${failed ? `，失败 ${failed} 张` : ""}`);
 }
 
 function openEditor(image) {
@@ -143,33 +269,62 @@ async function saveEditor() {
     title: els.editTitle.value,
     description: els.editDescription.value,
     tags: splitTags(els.editTags.value),
+    rating: els.editRating.value,
     safety_status: els.editSafetyStatus.value,
     send_transform: els.editSendTransform.value,
   };
-  if (els.editRating.value !== "") {
-    payload.rating = Number(els.editRating.value);
-  }
   const result = await bridge.apiPost("image/update", payload);
   assertOk(result);
   els.editor.close();
-  await Promise.all([loadStats(), loadCategories(), loadImages()]);
+  await Promise.all([loadStats(), loadCategories()]);
+  await loadImages({ reset: true });
   setStatus("已保存");
 }
 
-async function uploadImage(event) {
+async function uploadSelectedFiles(event) {
   event.preventDefault();
-  const file = els.uploadFile.files[0];
-  if (!file) {
+  await uploadFiles(Array.from(els.uploadFile.files));
+  els.uploadFile.value = "";
+}
+
+async function uploadDroppedFiles(event) {
+  event.preventDefault();
+  els.dropZone.classList.remove("dragging");
+  const files = Array.from(event.dataTransfer.files || []).filter((file) =>
+    file.type.startsWith("image/")
+  );
+  await uploadFiles(files);
+}
+
+async function uploadFiles(files) {
+  if (!files.length) {
     setStatus("请选择要上传的图片。");
     return;
   }
   const category = encodeURIComponent((els.uploadCategory.value || "默认").trim());
-  setStatus("正在上传...");
-  const result = await bridge.upload(`upload/${category}`, file);
-  assertOk(result);
-  els.uploadFile.value = "";
+  let saved = 0;
+  let duplicates = 0;
+  for (const [index, file] of files.entries()) {
+    setStatus(`正在上传 ${index + 1}/${files.length}...`);
+    const result = await bridge.upload(`upload/${category}`, file);
+    assertOk(result);
+    if (result.status === "duplicate") {
+      duplicates += 1;
+    } else {
+      saved += 1;
+    }
+  }
   await loadAll();
-  setStatus(result.status === "duplicate" ? "图片已存在" : "上传完成");
+  setStatus(`上传完成：新增 ${saved} 张，已存在 ${duplicates} 张`);
+}
+
+function onDragOver(event) {
+  event.preventDefault();
+  els.dropZone.classList.add("dragging");
+}
+
+function onDragLeave() {
+  els.dropZone.classList.remove("dragging");
 }
 
 function renderTags(tags) {

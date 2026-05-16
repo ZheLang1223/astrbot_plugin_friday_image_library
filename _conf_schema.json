@@ -28,5 +28,17 @@
     "type": "bool",
     "default": true,
     "hint": "关闭后，上传成功时不额外回复；错误和重复仍会提示。"
+  },
+  "allowed_group_ids": {
+    "description": "允许使用图库指令的群号列表",
+    "type": "list",
+    "default": [],
+    "hint": "仅列表中的群可以使用 /friday 等指令。留空表示所有群都允许。"
+  },
+  "admin_qq_numbers": {
+    "description": "管理员 QQ 号列表",
+    "type": "list",
+    "default": [],
+    "hint": "管理员可上传图片和管理定时发图。留空表示不限制。"
   }
 }

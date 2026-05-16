@@ -21,7 +21,10 @@ def rotate_180_for_send(record, transform_root: Path | str) -> Path:
     try:
         from PIL import Image
     except ImportError as exc:
-        raise ImageTransformError("敏感图旋转发送需要 Pillow：请安装 pillow 后重载插件。") from exc
+        raise ImageTransformError(
+            "敏感图旋转发送需要 Pillow 库。"
+            "请在 AstrBot Python 环境中执行: pip install Pillow>=10.0.0 然后重载插件。"
+        ) from exc
 
     source = record.path
     if not source.exists() or not source.is_file():

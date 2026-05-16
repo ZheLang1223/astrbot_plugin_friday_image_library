@@ -40,5 +40,29 @@
     "type": "list",
     "default": [],
     "hint": "管理员可上传图片和管理定时发图。留空表示不限制。"
+  },
+  "scheduled_send_enabled": {
+    "description": "启用定时发图",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后按 scheduled_send_cron 向 scheduled_send_group_ids 中已绑定的群发送随机图片。"
+  },
+  "scheduled_send_cron": {
+    "description": "定时发图 Cron",
+    "type": "string",
+    "default": "0 9 * * *",
+    "hint": "使用 5 段 crontab 表达式，默认每天 09:00，时区为 Asia/Shanghai。"
+  },
+  "scheduled_send_group_ids": {
+    "description": "定时发图群号列表",
+    "type": "list",
+    "default": [],
+    "hint": "填写目标 QQ 群号。每个目标群还需要管理员在群内执行 /frischedule bind 绑定会话。"
+  },
+  "scheduled_send_category": {
+    "description": "定时发图分类",
+    "type": "string",
+    "default": "",
+    "hint": "留空表示从全部分类随机发送；可填写中文显示名或英文 slug。"
   }
 }

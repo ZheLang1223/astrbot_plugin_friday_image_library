@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import inspect
+import json
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
@@ -55,7 +57,8 @@ except ImportError:  # pragma: no cover - compatibility with path-based plugin l
 
 
 PLUGIN_NAME = "astrbot_plugin_friday_image_library"
-VERSION = "1.2.0"
+VERSION = "1.2.6"
+SCHEDULE_JOB_NAME = "Friday image library scheduled send"
 
 
 @register(PLUGIN_NAME, "zhelang", "QQ 本地图片库随机发送、上传和 Web 管理插件", VERSION)
@@ -64,11 +67,26 @@ class FridayImageLibraryPlugin(Star):
         super().__init__(context)
         self.config = config or {}
         self.library: ImageLibrary | None = None
+        self._schedule_job_id: str | None = None
+        self._group_sessions: dict[str, str] = {}
         self._register_web_apis(context)
 
     async def initialize(self):
         self.library = self._create_library()
+        self._check_pillow()
+        self._load_schedule_sessions()
+        await self._setup_schedule()
         logger.info(f"Friday image library initialized at {self.library.library_root}")
+
+    def _check_pillow(self):
+        try:
+            from PIL import __version__
+            logger.info(f"Pillow {__version__} detected")
+        except ImportError:
+            logger.warning(
+                "Pillow not installed. Sensitive image rotation will not work. "
+                "Run: pip install Pillow>=10.0.0"
+            )
 
     @filter.command("frione")
     async def random_image(self, event: AstrMessageEvent, category: str = ""):
@@ -81,6 +99,8 @@ class FridayImageLibraryPlugin(Star):
             yield result
 
     async def _random_image_result(self, event: AstrMessageEvent, category: str = ""):
+        if not self._is_group_allowed(event):
+            return
         library = self._require_library()
         requested_category = self._category_or_none(category)
         try:
@@ -102,15 +122,24 @@ class FridayImageLibraryPlugin(Star):
 
         library.record_send(record.id, self._session_id(event))
         record = library.get_image(record.id) or record
-        yield event.image_result(str(send_path))
-        yield event.plain_result(self._image_info_text(record))
+        result = self._combined_image_result(event, send_path, self._image_info_text(record))
+        if result is not None:
+            yield result
+        else:
+            yield event.image_result(str(send_path))
+            yield event.plain_result(self._image_info_text(record))
 
-    @filter.command("friupload")
+    @filter.command("friup")
     async def upload(self, event: AstrMessageEvent, category: str = ""):
+        if not self._is_group_allowed(event):
+            return
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可上传图片。")
+            return
         library = self._require_library()
-        category = self._category_or_default(category)
+        category_input = self._category_or_default(category)
         try:
-            category = library.validate_category_name(category)
+            library.validate_category_name(category_input)
         except InvalidCategoryName as exc:
             yield event.plain_result(str(exc))
             return
@@ -124,7 +153,7 @@ class FridayImageLibraryPlugin(Star):
             details = "\n".join(f"- {error}" for error in extraction.errors[:3])
             suffix = f"\n{details}" if details else ""
             yield event.plain_result(
-                "没有检测到可上传的图片。请发送 /friupload 分类名 并附带图片，"
+                "没有检测到可上传的图片。请发送 /friup 分类名 并附带图片，"
                 "或回复一条图片消息后发送该指令。"
                 f"{suffix}"
             )
@@ -137,7 +166,7 @@ class FridayImageLibraryPlugin(Star):
         for image in extraction.images:
             try:
                 result = library.add_image(
-                    category=category,
+                    category=category_input,
                     source_path=image.path,
                     original_name=image.source_name,
                     detected_extension=image.extension,
@@ -156,7 +185,7 @@ class FridayImageLibraryPlugin(Star):
             return
 
         lines = [
-            f"上传完成：分类 {category}",
+            f"上传完成：分类 {category_input}",
             f"- 新增：{saved_count} 张",
             f"- 已存在：{duplicate_count} 张",
         ]
@@ -164,11 +193,18 @@ class FridayImageLibraryPlugin(Star):
             lines.append("- 失败：" + "；".join(failed[:3]))
         yield event.plain_result("\n".join(lines))
 
+    @filter.command("friupload")
+    async def upload_alias(self, event: AstrMessageEvent, category: str = ""):
+        async for result in self.upload(event, category):
+            yield result
+
     @filter.command("friclass")
     async def categories(self, event: AstrMessageEvent):
+        if not self._is_group_allowed(event):
+            return
         categories = self._require_library().category_stats()
         if not categories:
-            yield event.plain_result("图库还没有分类。可以发送 /friupload 分类名 并附带图片。")
+            yield event.plain_result("图库还没有分类。可以发送 /friup 分类名 并附带图片。")
             return
         lines = ["当前图库分类："]
         lines.extend(
@@ -179,22 +215,78 @@ class FridayImageLibraryPlugin(Star):
 
     @filter.command("frihelp")
     async def help(self, event: AstrMessageEvent):
+        if not self._is_group_allowed(event):
+            return
         yield event.plain_result(
             "\n".join(
                 [
-                    "Friday 本地图库 v1.2：",
+                    "Friday 本地图库 v1.3：",
                     "/friday - 从全部分类随机发一张",
                     "/friday 分类名 - 从指定分类随机发一张",
                     "/frione - 从全部分类随机发一张",
                     "/frione 分类名 - 从指定分类随机发一张",
                     "/friclass - 查看分类和数量",
-                    "/friupload 分类名 - 附带图片或回复图片后上传",
+                    "/friup 分类名 - 附带图片或回复图片后上传",
+                    "/frischedule status - 查看定时发图状态",
                     "/frihelp - 查看帮助",
+                    "提示：/friupload 仍可用作 /friup 的别名",
                 ]
             )
         )
 
+    @filter.command("frischedule")
+    async def schedule(self, event: AstrMessageEvent, action: str = "status"):
+        if not self._is_group_allowed(event):
+            return
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可管理定时发图。")
+            return
+
+        action = (action or "status").strip().lower()
+        if action in {"bind", "on"}:
+            group_id = self._group_id(event)
+            if not group_id:
+                yield event.plain_result("请在目标群内执行 /frischedule bind。")
+                return
+            scheduled_groups = self._scheduled_group_ids()
+            if scheduled_groups and group_id not in scheduled_groups:
+                yield event.plain_result("当前群不在 scheduled_send_group_ids 配置中。")
+                return
+            unified_origin = getattr(event, "unified_msg_origin", "") or self._session_id(event)
+            self._group_sessions[group_id] = str(unified_origin)
+            self._save_schedule_sessions()
+            yield event.plain_result(f"已绑定定时发图群：{group_id}")
+            return
+
+        if action == "test":
+            group_id = self._group_id(event)
+            if not group_id:
+                yield event.plain_result("请在目标群内执行 /frischedule test。")
+                return
+            if group_id not in self._group_sessions:
+                yield event.plain_result("当前群还未绑定，请先执行 /frischedule bind。")
+                return
+            result = await self._send_scheduled_image(target_group_ids=[group_id], force=True)
+            if result["sent"]:
+                yield event.plain_result("定时发图测试已发送。")
+            else:
+                errors = "；".join(result["failed"][:3]) or "没有可发送图片。"
+                yield event.plain_result(f"定时发图测试失败：{errors}")
+            return
+
+        if action == "reload":
+            await self._setup_schedule()
+            yield event.plain_result("定时发图配置已重载。")
+            return
+
+        if action == "status":
+            yield event.plain_result(self._schedule_status_text())
+            return
+
+        yield event.plain_result("用法：/frischedule bind|status|test|reload")
+
     async def terminate(self):
+        await self._clear_schedule()
         logger.info("Friday image library plugin terminated.")
 
     async def api_stats(self):
@@ -252,7 +344,7 @@ class FridayImageLibraryPlugin(Star):
         category = self._category_or_default(category)
         library = self._require_library()
         try:
-            category = library.validate_category_name(category)
+            library.validate_category_name(category)
             uploaded = await self._uploaded_file()
             if uploaded is None:
                 return self._json({"ok": False, "error": "缺少上传文件。"}, 400)
@@ -270,7 +362,7 @@ class FridayImageLibraryPlugin(Star):
                 uploader_id="web",
                 source_session="web",
             )
-        except ImageLibraryError as exc:
+        except (ImageLibraryError, ImageExtractionError) as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
         finally:
             if "temp_path" in locals() and temp_path.exists():
@@ -303,6 +395,38 @@ class FridayImageLibraryPlugin(Star):
             return await response
         return response
 
+    async def api_batch_update(self):
+        payload = await self._json_payload()
+        ids = payload.get("ids", [])
+        updates = payload.get("updates", {})
+        if not ids or not updates:
+            return self._json({"ok": False, "error": "缺少 ids 或 updates。"}, 400)
+        if not isinstance(ids, list) or not isinstance(updates, dict):
+            return self._json({"ok": False, "error": "ids 必须是列表，updates 必须是对象。"}, 400)
+        try:
+            result = self._require_library().batch_update_image_info(ids, updates)
+        except ImageLibraryError as exc:
+            return self._json({"ok": False, "error": str(exc)}, 400)
+        return self._json({"ok": True, "data": result})
+
+    async def api_batch_delete(self):
+        payload = await self._json_payload()
+        ids = payload.get("ids", [])
+        if not ids:
+            return self._json({"ok": False, "error": "缺少 ids。"}, 400)
+        if not isinstance(ids, list):
+            return self._json({"ok": False, "error": "ids 必须是列表。"}, 400)
+        library = self._require_library()
+        deleted = 0
+        failed: list[dict[str, str]] = []
+        for image_id in ids:
+            try:
+                library.delete_image(image_id)
+                deleted += 1
+            except ImageLibraryError as exc:
+                failed.append({"id": str(image_id), "error": str(exc)})
+        return self._json({"ok": True, "data": {"deleted": deleted, "failed": failed}})
+
     def _register_web_apis(self, context: Context) -> None:
         register_web_api = getattr(context, "register_web_api", None)
         if not callable(register_web_api):
@@ -312,6 +436,8 @@ class FridayImageLibraryPlugin(Star):
             ("/images", self.api_images, ["GET"], "Friday image list"),
             ("/categories", self.api_categories, ["GET"], "Friday image categories"),
             ("/image/update", self.api_update_image, ["POST"], "Friday image update"),
+            ("/image/batch-update", self.api_batch_update, ["POST"], "Friday image batch update"),
+            ("/image/batch-delete", self.api_batch_delete, ["POST"], "Friday image batch delete"),
             ("/upload", self.api_upload, ["POST"], "Friday image upload"),
             ("/upload/<category>", self.api_upload, ["POST"], "Friday image upload"),
             ("/preview", self.api_preview, ["GET"], "Friday image preview"),
@@ -320,8 +446,7 @@ class FridayImageLibraryPlugin(Star):
             register_web_api(f"/{PLUGIN_NAME}{path}", handler, methods, description)
 
     def _create_library(self) -> ImageLibrary:
-        plugin_name = getattr(self, "name", PLUGIN_NAME) or PLUGIN_NAME
-        data_root = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
+        data_root = self._data_root()
         library_root = data_root / "library"
         return ImageLibrary(
             library_root,
@@ -331,8 +456,11 @@ class FridayImageLibraryPlugin(Star):
         )
 
     def _transform_root(self) -> Path:
+        return self._data_root() / "transformed"
+
+    def _data_root(self) -> Path:
         plugin_name = getattr(self, "name", PLUGIN_NAME) or PLUGIN_NAME
-        return Path(get_astrbot_data_path()) / "plugin_data" / plugin_name / "transformed"
+        return Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
 
     def _require_library(self) -> ImageLibrary:
         if self.library is None:
@@ -365,6 +493,170 @@ class FridayImageLibraryPlugin(Star):
     def _upload_receipt(self) -> bool:
         return bool(self._config_get("upload_receipt", True))
 
+    def _allowed_group_ids(self) -> list[str]:
+        raw = self._config_get("allowed_group_ids", [])
+        return [str(g).strip() for g in raw if str(g).strip()]
+
+    def _is_group_allowed(self, event: AstrMessageEvent) -> bool:
+        allowed = self._allowed_group_ids()
+        if not allowed:
+            return True
+        group_id = self._group_id(event)
+        if not group_id:
+            return True
+        return str(group_id) in allowed
+
+    def _admin_qq_numbers(self) -> list[str]:
+        raw = self._config_get("admin_qq_numbers", [])
+        return [str(q).strip() for q in raw if str(q).strip()]
+
+    def _is_admin(self, event: AstrMessageEvent) -> bool:
+        admins = self._admin_qq_numbers()
+        if not admins:
+            return True
+        return self._sender_id(event) in admins
+
+    def _scheduled_send_enabled(self) -> bool:
+        return bool(self._config_get("scheduled_send_enabled", False))
+
+    def _scheduled_cron(self) -> str:
+        value = str(self._config_get("scheduled_send_cron", "0 9 * * *")).strip()
+        return value if len(value.split()) == 5 else "0 9 * * *"
+
+    def _scheduled_group_ids(self) -> list[str]:
+        raw = self._config_get("scheduled_send_group_ids", [])
+        return [str(g).strip() for g in raw if str(g).strip()]
+
+    def _scheduled_category(self) -> str | None:
+        category = str(self._config_get("scheduled_send_category", "") or "").strip()
+        return category or None
+
+    def _schedule_sessions_path(self) -> Path:
+        return self._data_root() / "schedule_sessions.json"
+
+    def _load_schedule_sessions(self) -> None:
+        path = self._schedule_sessions_path()
+        if not path.exists():
+            self._group_sessions = {}
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                self._group_sessions = {
+                    str(group_id): str(session)
+                    for group_id, session in data.items()
+                    if str(group_id).strip() and str(session).strip()
+                }
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(f"Failed to load Friday schedule sessions: {exc}")
+            self._group_sessions = {}
+
+    def _save_schedule_sessions(self) -> None:
+        path = self._schedule_sessions_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self._group_sessions, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    async def _setup_schedule(self) -> None:
+        await self._clear_schedule()
+        if not self._scheduled_send_enabled():
+            return
+        if not self._scheduled_group_ids():
+            logger.warning("scheduled_send_enabled is true but scheduled_send_group_ids is empty.")
+            return
+        cron_manager = getattr(self.context, "cron_manager", None)
+        add_basic_job = getattr(cron_manager, "add_basic_job", None)
+        if not callable(add_basic_job):
+            logger.warning("AstrBot CronManager is not available; scheduled image send disabled.")
+            return
+        try:
+            job = await add_basic_job(
+                name=SCHEDULE_JOB_NAME,
+                cron_expression=self._scheduled_cron(),
+                handler=self._send_scheduled_image,
+                description="Friday 本地图库定时发图",
+                timezone="Asia/Shanghai",
+                payload={},
+                enabled=True,
+                persistent=False,
+            )
+            self._schedule_job_id = str(getattr(job, "job_id", "") or "")
+        except Exception as exc:  # pragma: no cover - depends on AstrBot runtime
+            logger.warning(f"Failed to register Friday scheduled send job: {exc}")
+            self._schedule_job_id = None
+
+    async def _clear_schedule(self) -> None:
+        if not self._schedule_job_id:
+            return
+        cron_manager = getattr(self.context, "cron_manager", None)
+        delete_job = getattr(cron_manager, "delete_job", None)
+        if callable(delete_job):
+            try:
+                await delete_job(self._schedule_job_id)
+            except Exception as exc:  # pragma: no cover - depends on AstrBot runtime
+                logger.warning(f"Failed to delete Friday scheduled send job: {exc}")
+        self._schedule_job_id = None
+
+    async def _send_scheduled_image(
+        self,
+        *,
+        target_group_ids: list[str] | None = None,
+        force: bool = False,
+    ) -> dict[str, list[str] | int]:
+        if not force and not self._scheduled_send_enabled():
+            return {"sent": 0, "failed": []}
+        group_ids = target_group_ids or self._scheduled_group_ids()
+        failed: list[str] = []
+        sent = 0
+        for group_id in group_ids:
+            session = self._group_sessions.get(str(group_id))
+            if not session:
+                failed.append(f"{group_id}: 未绑定会话，请在群内执行 /frischedule bind")
+                continue
+            try:
+                record = self._require_library().select_random(
+                    category=self._scheduled_category(),
+                    session_id=session,
+                )
+                send_path = self._send_path_for_record(record)
+                self._require_library().record_send(record.id, session)
+                record = self._require_library().get_image(record.id) or record
+                chain = self._message_chain(send_path, self._image_info_text(record))
+                send_message = getattr(self.context, "send_message", None)
+                if not callable(send_message):
+                    raise ImageLibraryError("当前 AstrBot Context 不支持主动发送。")
+                ok = await send_message(session, chain)
+                if ok is False:
+                    raise ImageLibraryError("AstrBot 未找到可发送的目标会话。")
+                sent += 1
+            except (ImageLibraryError, ImageTransformError, CategoryNotFound, NoImagesFound) as exc:
+                failed.append(f"{group_id}: {exc}")
+            except Exception as exc:  # pragma: no cover - adapter/runtime guard
+                logger.warning(f"Friday scheduled send failed for group {group_id}: {exc}")
+                failed.append(f"{group_id}: {exc}")
+        return {"sent": sent, "failed": failed}
+
+    def _schedule_status_text(self) -> str:
+        group_ids = self._scheduled_group_ids()
+        lines = [
+            "定时发图状态：",
+            f"- 启用：{'是' if self._scheduled_send_enabled() else '否'}",
+            f"- Cron：{self._scheduled_cron()}",
+            f"- 分类：{self._scheduled_category() or '全部'}",
+            f"- 已注册任务：{'是' if self._schedule_job_id else '否'}",
+        ]
+        if group_ids:
+            bound = [group_id for group_id in group_ids if group_id in self._group_sessions]
+            unbound = [group_id for group_id in group_ids if group_id not in self._group_sessions]
+            lines.append(f"- 配置群：{'、'.join(group_ids)}")
+            lines.append(f"- 已绑定：{'、'.join(bound) if bound else '无'}")
+            lines.append(f"- 未绑定：{'、'.join(unbound) if unbound else '无'}")
+        else:
+            lines.append("- 配置群：未配置")
+        return "\n".join(lines)
+
     def _category_or_default(self, category: str) -> str:
         category = (category or "").strip()
         if category:
@@ -394,6 +686,16 @@ class FridayImageLibraryPlugin(Star):
         user_id = getattr(sender, "user_id", "")
         return str(user_id or "")
 
+    def _group_id(self, event: AstrMessageEvent) -> str:
+        get_group_id = getattr(event, "get_group_id", None)
+        if callable(get_group_id):
+            group_id = get_group_id()
+            if group_id:
+                return str(group_id)
+        message_obj = getattr(event, "message_obj", None)
+        group_id = getattr(message_obj, "group_id", "")
+        return str(group_id or "")
+
     def _category_missing_message(self, category: str) -> str:
         categories = self._require_library().list_categories()
         if not categories:
@@ -421,6 +723,16 @@ class FridayImageLibraryPlugin(Star):
                 send_transform="rotate_180",
             )
         return transformed_send_path(record, self._transform_root())
+
+    def _message_chain(self, image_path: Path, text: str) -> MessageChain:
+        return MessageChain().file_image(str(image_path)).message(text)
+
+    def _combined_image_result(self, event: AstrMessageEvent, image_path: Path, text: str):
+        try:
+            return event.chain_result([Comp.Image.fromFileSystem(str(image_path)), Comp.Plain(text)])
+        except Exception as exc:  # pragma: no cover - adapter compatibility fallback
+            logger.warning(f"Failed to build combined image result: {exc}")
+            return None
 
     def _image_dict(self, record) -> dict[str, object]:
         data = self._require_library().to_dict(record)

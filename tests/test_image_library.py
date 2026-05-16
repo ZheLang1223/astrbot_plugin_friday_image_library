@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from services.image_library import ImageLibrary, ImageLibraryError, _slugify
+from services.image_transform import transformed_send_path
 
 
 def write_image(path: Path, marker: bytes = b"") -> None:
@@ -84,8 +85,11 @@ class ImageLibraryTest(unittest.TestCase):
             self.assertEqual(deleted.id, result.record.id)
             self.assertFalse(image_path.exists())
             self.assertIsNone(library.get_image(result.record.id))
-            with sqlite3.connect(root / "friday_images.sqlite3") as conn:
+            conn = sqlite3.connect(root / "friday_images.sqlite3")
+            try:
                 count = conn.execute("SELECT COUNT(*) FROM send_history").fetchone()[0]
+            finally:
+                conn.close()
             self.assertEqual(count, 0)
 
     def test_batch_update_allows_only_safe_fields_and_reports_failures(self) -> None:
@@ -118,6 +122,32 @@ class ImageLibraryTest(unittest.TestCase):
             self.assertEqual(updated.send_transform, "rotate_180")
             with self.assertRaises(ImageLibraryError):
                 library.batch_update_image_info([result.record.id], {"relative_path": "blocked.jpg"})
+
+    def test_send_transform_rotates_even_when_safety_status_is_normal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            from PIL import Image
+
+            root = Path(tmp)
+            source = root / "source.png"
+            image = Image.new("RGB", (3, 5), "white")
+            image.putpixel((0, 0), (255, 0, 0))
+            image.putpixel((2, 4), (0, 0, 255))
+            image.save(source)
+            library = self.make_library(root)
+            result = library.add_image(
+                category="默认",
+                source_path=source,
+                original_name="source.png",
+                detected_extension="png",
+            )
+
+            record = library.update_image_info(result.record.id, send_transform="rotate_180")
+            send_path = transformed_send_path(record, root / "transformed")
+
+            self.assertNotEqual(send_path, record.path)
+            self.assertTrue(send_path.exists())
+            rotated = Image.open(send_path)
+            self.assertEqual(rotated.getpixel((2, 4)), (255, 0, 0))
 
 
 if __name__ == "__main__":

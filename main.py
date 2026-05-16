@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - compatibility with path-based plugin l
 
 
 PLUGIN_NAME = "astrbot_plugin_friday_image_library"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 SCHEDULE_JOB_NAME = "Friday image library scheduled send"
 
 

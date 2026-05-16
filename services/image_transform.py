@@ -8,7 +8,7 @@ class ImageTransformError(Exception):
 
 
 def transformed_send_path(record, transform_root: Path | str) -> Path:
-    if record.send_transform == "none" or record.safety_status == "normal":
+    if record.send_transform == "none":
         return record.path
     if record.send_transform == "rotate_180":
         return rotate_180_for_send(record, transform_root)

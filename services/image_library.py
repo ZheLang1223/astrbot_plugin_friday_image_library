@@ -6,15 +6,53 @@ import random
 import re
 import shutil
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .image_io import normalize_extensions, safe_filename
 
+SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+CATEGORY_INPUT_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]+$")
+BATCH_UPDATE_FIELDS = {
+    "title",
+    "description",
+    "tags",
+    "rating",
+    "visibility",
+    "safety_status",
+    "send_transform",
+}
 
-CATEGORY_RE = re.compile(r"^[0-9A-Za-z_\-\u4e00-\u9fff]+$")
+
+def _slugify(name: str) -> str:
+    """Convert a category name to an English slug."""
+    name = (name or "").strip()
+    try:
+        from pypinyin import lazy_pinyin
+        parts = lazy_pinyin(name)
+        raw = "_".join(parts)
+    except ImportError:
+        parts = []
+        for char in name:
+            if char.isascii() and char.isalnum():
+                parts.append(char.lower())
+            elif char in {"_", "-"}:
+                parts.append("_")
+            elif "\u4e00" <= char <= "\u9fff":
+                parts.append(f"u{ord(char):x}")
+            else:
+                parts.append("_")
+        raw = "_".join(parts)
+    slug = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+    slug = re.sub(r"_+", "_", slug)
+    if not slug or not slug[0].isascii() or not slug[0].isalpha():
+        slug = "cat_" + (slug or "default")
+    return slug[:40]
+
+
 SAFETY_STATUSES = {"normal", "sensitive", "hidden"}
 SEND_TRANSFORMS = {"none", "rotate_180"}
 
@@ -103,16 +141,94 @@ class ImageLibrary:
         self.allowed_extensions = normalize_extensions(allowed_extensions)
         self.recent_window = max(0, int(recent_window or 0))
         self._init_db()
-        self.migrate_legacy_index()
+        self._migrate_to_flat_library()
         self.sync_filesystem()
 
     def validate_category_name(self, category: str) -> str:
-        category = (category or "").strip()
-        if not category:
+        slug, _ = self.normalize_category(category)
+        return slug
+
+    def normalize_category(self, category: str) -> tuple[str, str]:
+        display_name = (category or "").strip()
+        if not display_name:
             raise InvalidCategoryName("分类名不能为空。")
-        if not CATEGORY_RE.fullmatch(category):
+        if not CATEGORY_INPUT_RE.fullmatch(display_name):
             raise InvalidCategoryName("分类名只能包含中文、英文、数字、下划线或短横线。")
-        return category
+        slug = self.resolve_category(display_name)
+        existing_display_name = self.get_category_display_name(slug)
+        if existing_display_name != slug:
+            display_name = existing_display_name
+        return slug, display_name
+
+    def resolve_category(self, user_input: str) -> str:
+        """Resolve user input (slug or display_name) to a slug."""
+        display_name = user_input.strip()
+        slug = display_name.lower()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT slug FROM categories WHERE display_name = ?",
+                (display_name,),
+            ).fetchone()
+            if row:
+                return row["slug"]
+            if SLUG_RE.fullmatch(slug):
+                row = conn.execute(
+                    "SELECT slug FROM categories WHERE slug = ?",
+                    (slug,),
+                ).fetchone()
+                return row["slug"] if row else slug
+        return _slugify(user_input)
+
+    def create_category(self, slug: str, display_name: str) -> None:
+        display_name = (display_name or slug).strip() or slug
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO categories (slug, display_name, created_at) VALUES (?, ?, ?)",
+                (slug, display_name, now_iso()),
+            )
+            row = conn.execute(
+                "SELECT display_name FROM categories WHERE slug = ?",
+                (slug,),
+            ).fetchone()
+            if row and row["display_name"] == slug and display_name != slug:
+                conn.execute(
+                    "UPDATE categories SET display_name = ? WHERE slug = ?",
+                    (display_name, slug),
+                )
+
+    def get_category_display_name(self, slug: str) -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT display_name FROM categories WHERE slug = ?",
+                (slug,),
+            ).fetchone()
+            return row["display_name"] if row else slug
+
+    def list_categories_with_display(self) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT i.category AS slug,
+                       COALESCE(c.display_name, i.category) AS display_name,
+                       COUNT(*) AS image_count,
+                       COALESCE(SUM(i.send_count), 0) AS send_count,
+                       MAX(i.created_at) AS latest_upload
+                FROM images i
+                LEFT JOIN categories c ON c.slug = i.category
+                GROUP BY i.category
+                ORDER BY i.category
+                """
+            ).fetchall()
+        return [
+            {
+                "category": row["slug"],
+                "display_name": row["display_name"],
+                "image_count": int(row["image_count"]),
+                "send_count": int(row["send_count"] or 0),
+                "latest_upload": row["latest_upload"],
+            }
+            for row in rows
+        ]
 
     def list_categories(self) -> list[tuple[str, int]]:
         with self._connect() as conn:
@@ -124,24 +240,30 @@ class ImageLibrary:
                 ORDER BY category
                 """
             ).fetchall()
-        return [(row["category"], int(row["image_count"])) for row in rows]
+        return [
+            (self.get_category_display_name(row["category"]), int(row["image_count"]))
+            for row in rows
+        ]
 
     def category_stats(self) -> list[dict[str, object]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT category,
+                SELECT i.category AS slug,
+                       COALESCE(c.display_name, i.category) AS display_name,
                        COUNT(*) AS image_count,
-                       COALESCE(SUM(send_count), 0) AS send_count,
-                       MAX(created_at) AS latest_upload
-                FROM images
-                GROUP BY category
-                ORDER BY category
+                       COALESCE(SUM(i.send_count), 0) AS send_count,
+                       MAX(i.created_at) AS latest_upload
+                FROM images i
+                LEFT JOIN categories c ON c.slug = i.category
+                GROUP BY i.category
+                ORDER BY i.category
                 """
             ).fetchall()
         return [
             {
-                "category": row["category"],
+                "category": row["display_name"],
+                "slug": row["slug"],
                 "image_count": int(row["image_count"]),
                 "send_count": int(row["send_count"] or 0),
                 "latest_upload": row["latest_upload"],
@@ -261,7 +383,7 @@ class ImageLibrary:
         uploader_id: str = "",
         source_session: str = "",
     ) -> SaveImageResult:
-        category = self.validate_category_name(category)
+        category, display_name = self.normalize_category(category)
         source_path = Path(source_path)
         if not source_path.exists() or not source_path.is_file():
             raise ImageLibraryError("待保存图片不存在。")
@@ -278,11 +400,11 @@ class ImageLibrary:
         if duplicate:
             return SaveImageResult("duplicate", duplicate, duplicate.path)
 
-        category_dir = self.library_root / category
-        category_dir.mkdir(parents=True, exist_ok=True)
-        target = self._unique_target(category_dir, original_name, sha256, extension)
+        self.create_category(category, display_name)
+        self.library_root.mkdir(parents=True, exist_ok=True)
+        target = self._unique_target(self.library_root, original_name, sha256, extension)
         shutil.copy2(source_path, target)
-        relative_path = target.relative_to(self.library_root).as_posix()
+        relative_path = target.name
         now = now_iso()
         title = safe_filename(original_name, fallback=target.stem)
         with self._connect() as conn:
@@ -394,6 +516,48 @@ class ImageLibrary:
             raise ImageLibraryError("图片更新后无法读取记录。")
         return updated
 
+    def batch_update_image_info(
+        self,
+        image_ids: Iterable[str],
+        updates: dict[str, object],
+    ) -> dict[str, object]:
+        safe_updates = {key: value for key, value in updates.items() if key in BATCH_UPDATE_FIELDS}
+        if not safe_updates:
+            raise ImageLibraryError("没有可批量更新的字段。")
+
+        updated = 0
+        failed: list[dict[str, str]] = []
+        for raw_id in image_ids:
+            image_id = str(raw_id).strip()
+            if not image_id:
+                continue
+            payload = dict(safe_updates)
+            if "rating" in payload and (payload["rating"] is None or payload["rating"] == ""):
+                payload.pop("rating")
+                payload["clear_rating"] = True
+            try:
+                self.update_image_info(image_id, **payload)
+                updated += 1
+            except (ImageLibraryError, TypeError, ValueError) as exc:
+                failed.append({"id": image_id, "error": str(exc)})
+        return {"updated": updated, "failed": failed}
+
+    def delete_image(self, image_id: str) -> ImageRecord:
+        record = self.get_image(image_id)
+        if record is None:
+            raise ImageLibraryError("图片不存在。")
+        path = record.path.resolve()
+        try:
+            path.relative_to(self.library_root.resolve())
+        except ValueError as exc:
+            raise ImageLibraryError("图片文件路径不在图库目录内。") from exc
+        with self._connect() as conn:
+            conn.execute("DELETE FROM send_history WHERE image_id = ?", (record.id,))
+            conn.execute("DELETE FROM images WHERE id = ?", (record.id,))
+        if path.exists() and path.is_file():
+            path.unlink()
+        return record
+
     def record_send(self, image_id: str, session_id: str) -> None:
         timestamp = now_iso()
         with self._connect() as conn:
@@ -412,13 +576,6 @@ class ImageLibrary:
                 (image_id, session_id or "global", timestamp),
             )
 
-    def migrate_legacy_index(self) -> None:
-        legacy_path = self.library_root / ".index.json"
-        if not legacy_path.exists():
-            return
-        self.sync_filesystem()
-        legacy_path.unlink()
-
     def sync_filesystem(self) -> None:
         with self._connect() as conn:
             existing_ids = {row["id"] for row in conn.execute("SELECT id FROM images").fetchall()}
@@ -426,8 +583,9 @@ class ImageLibrary:
             sha256 = sha256_file(path)
             if sha256 in existing_ids:
                 continue
-            relative_path = path.relative_to(self.library_root).as_posix()
-            category = path.parent.name
+            relative_path = path.name
+            category = self._config_get_default_category()
+            self.create_category(category, category)
             extension = path.suffix.lower().lstrip(".")
             if extension == "jpeg":
                 extension = "jpg"
@@ -458,11 +616,17 @@ class ImageLibrary:
                     ),
                 )
 
+    def _config_get_default_category(self) -> str:
+        return "default"
+
     def to_dict(self, record: ImageRecord) -> dict[str, object]:
+        display_name = self.get_category_display_name(record.category)
         return {
             "id": record.id,
             "short_id": record.short_id,
-            "category": record.category,
+            "category": display_name,
+            "category_slug": record.category,
+            "category_display_name": display_name,
             "relative_path": record.relative_path,
             "title": record.title,
             "description": record.description,
@@ -521,6 +685,23 @@ class ImageLibrary:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS categories (
+                    slug TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                )
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_images_category ON images(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_images_visibility ON images(visibility)")
             self._ensure_column(conn, "images", "safety_status", "TEXT NOT NULL DEFAULT 'normal'")
@@ -544,10 +725,192 @@ class ImageLibrary:
                 "CREATE INDEX IF NOT EXISTS idx_send_history_session ON send_history(session_id, sent_at)"
             )
 
-    def _connect(self) -> sqlite3.Connection:
+    def _get_schema_version(self, key: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM schema_version WHERE key = ?", (key,)
+            ).fetchone()
+            return int(row["value"]) if row else 0
+
+    def _set_schema_version(self, key: str, value: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+
+    def _migrate_to_flat_library(self) -> None:
+        if self._get_schema_version("flat_migration") >= 1:
+            return
+        subdirs = [d for d in self.library_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        if not subdirs:
+            self._ensure_category_rows()
+            self._set_schema_version("flat_migration", 1)
+            return
+        slug_map: dict[str, str] = {}
+        with self._connect() as conn:
+            used_slugs = {
+                row["slug"] for row in conn.execute("SELECT slug FROM categories").fetchall()
+            }
+            for subdir in subdirs:
+                old_name = subdir.name
+                row = conn.execute(
+                    "SELECT slug FROM categories WHERE display_name = ?",
+                    (old_name,),
+                ).fetchone()
+                if row:
+                    slug = row["slug"]
+                else:
+                    slug = _slugify(old_name)
+                    base_slug = slug
+                    counter = 1
+                    while slug in used_slugs or slug in slug_map.values():
+                        slug = f"{base_slug}_{counter}"
+                        counter += 1
+                slug_map[old_name] = slug
+                used_slugs.add(slug)
+
+            for old_name, slug in slug_map.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO categories (slug, display_name, created_at) VALUES (?, ?, ?)",
+                    (slug, old_name, now_iso()),
+                )
+            for old_name, slug in slug_map.items():
+                old_dir = self.library_root / old_name
+                for file_path in old_dir.iterdir():
+                    if (
+                        not file_path.is_file()
+                        or file_path.suffix.lower().lstrip(".") not in self.allowed_extensions
+                    ):
+                        continue
+                    sha256 = sha256_file(file_path)
+                    extension = file_path.suffix.lower().lstrip(".")
+                    if extension == "jpeg":
+                        extension = "jpg"
+                    new_path = self.library_root / file_path.name
+                    if new_path.exists():
+                        new_path = self._unique_target(
+                            self.library_root,
+                            file_path.name,
+                            sha256,
+                            extension,
+                        )
+                    file_path.rename(new_path)
+                    old_relative = f"{old_name}/{file_path.name}"
+                    new_relative = new_path.name
+                    cursor = conn.execute(
+                        "UPDATE images SET relative_path = ?, category = ? WHERE relative_path = ?",
+                        (new_relative, slug, old_relative),
+                    )
+                    if cursor.rowcount == 0:
+                        duplicate = conn.execute(
+                            "SELECT 1 FROM images WHERE sha256 = ? LIMIT 1",
+                            (sha256,),
+                        ).fetchone()
+                        if duplicate is None:
+                            self._insert_filesystem_record(
+                                conn,
+                                path=new_path,
+                                category=slug,
+                                sha256=sha256,
+                                extension=extension,
+                                source_session="migration",
+                            )
+                conn.execute(
+                    "UPDATE images SET category = ? WHERE category = ?",
+                    (slug, old_name),
+                )
+            for old_name in slug_map:
+                old_dir = self.library_root / old_name
+                try:
+                    if old_dir.exists() and not any(old_dir.iterdir()):
+                        old_dir.rmdir()
+                except OSError:
+                    pass
+        self._ensure_category_rows()
+        self._set_schema_version("flat_migration", 1)
+
+    def _ensure_category_rows(self) -> None:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT DISTINCT category FROM images").fetchall()
+            used_slugs = {
+                row["slug"] for row in conn.execute("SELECT slug FROM categories").fetchall()
+            }
+            for row in rows:
+                category = str(row["category"] or "").strip()
+                if not category:
+                    continue
+                if category in used_slugs:
+                    continue
+                if SLUG_RE.fullmatch(category):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO categories (slug, display_name, created_at) VALUES (?, ?, ?)",
+                        (category, category, now_iso()),
+                    )
+                    used_slugs.add(category)
+                    continue
+                slug = _slugify(category)
+                base_slug = slug
+                counter = 1
+                while slug in used_slugs:
+                    slug = f"{base_slug}_{counter}"
+                    counter += 1
+                conn.execute(
+                    "INSERT OR IGNORE INTO categories (slug, display_name, created_at) VALUES (?, ?, ?)",
+                    (slug, category, now_iso()),
+                )
+                conn.execute("UPDATE images SET category = ? WHERE category = ?", (slug, category))
+                used_slugs.add(slug)
+
+    def _insert_filesystem_record(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        path: Path,
+        category: str,
+        sha256: str,
+        extension: str,
+        source_session: str,
+    ) -> None:
+        now = now_iso()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO images (
+                id, sha256, category, relative_path, title, description, tags_json,
+                rating, visibility, safety_status, send_transform, size_bytes, extension,
+                original_name, uploader_id, source_session, created_at, updated_at,
+                send_count, last_sent_at
+            )
+            VALUES (?, ?, ?, ?, ?, '', '[]', NULL, 'public', 'normal', 'none',
+                    ?, ?, ?, '', ?, ?, ?, 0, NULL)
+            """,
+            (
+                sha256,
+                sha256,
+                category,
+                path.name,
+                safe_filename(path.name, fallback=path.stem),
+                path.stat().st_size,
+                extension,
+                path.name,
+                source_session,
+                now,
+                now,
+            ),
+        )
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _recent_image_ids(self, session_id: str) -> list[str]:
         if self.recent_window <= 0:
@@ -567,12 +930,9 @@ class ImageLibrary:
 
     def _scan_image_paths(self) -> list[Path]:
         paths: list[Path] = []
-        for category_dir in sorted(self.library_root.iterdir(), key=lambda path: path.name):
-            if not category_dir.is_dir() or category_dir.name.startswith("."):
-                continue
-            for path in sorted(category_dir.iterdir(), key=lambda item: item.name):
-                if path.is_file() and path.suffix.lower().lstrip(".") in self.allowed_extensions:
-                    paths.append(path)
+        for path in sorted(self.library_root.iterdir(), key=lambda item: item.name):
+            if path.is_file() and path.suffix.lower().lstrip(".") in self.allowed_extensions:
+                paths.append(path)
         return paths
 
     def _row_to_record(self, row: sqlite3.Row) -> ImageRecord:

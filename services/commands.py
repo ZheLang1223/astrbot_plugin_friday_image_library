@@ -108,7 +108,7 @@ class CommandService:
             event,
             "\n".join(
                 [
-                    "Friday 本地图库 v1.4.1：",
+                    "Friday 本地图库 v1.4.2：",
                     "/friday - 从全部分类随机发一张",
                     "/friday 分类名 - 从指定分类随机发一张",
                     "/friday #标签 - 从指定标签随机发一张",

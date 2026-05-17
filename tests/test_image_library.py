@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from services.image_library import ImageLibrary, ImageLibraryError, _slugify
+from services.image_library import ImageLibrary, ImageLibraryError, NoImagesFound, _slugify
 from services.image_transform import transformed_send_path
 
 
@@ -215,6 +215,36 @@ class ImageLibraryTest(unittest.TestCase):
             selected = library.select_random(category=None, tag="cat", session_id="session")
 
             self.assertEqual(selected.id, first.record.id)
+
+    def test_empty_category_is_visible_and_resolves_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = self.make_library(root)
+
+            created = library.create_category_from_input("待整理")
+            stats = library.category_stats()
+            listed = library.list_categories()
+            images = library.list_images(category="待整理")
+
+            self.assertEqual(created["display_name"], "待整理")
+            self.assertIn(
+                {"category": "待整理", "slug": created["slug"], "image_count": 0, "send_count": 0, "latest_upload": None},
+                stats,
+            )
+            self.assertIn(("待整理", 0), listed)
+            self.assertEqual(images, [])
+            with self.assertRaises(NoImagesFound):
+                library.select_random(category="待整理", session_id="session")
+
+    def test_category_display_name_must_be_unique_on_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = self.make_library(root)
+            library.create_category_from_input("猫猫")
+            library.create_category_from_input("狗狗")
+
+            with self.assertRaises(ImageLibraryError):
+                library.rename_category("狗狗", "猫猫")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Friday 本地图库插件
 
 > [!NOTE]
-> v1.4.1 是产品化重构后的兼容修正版本：QQ 侧收敛为 `/friday`、`/friup`、`/frihelp`，插件配置改为 AstrBot `_conf_schema.json` 分层对象，QQ/Web 上传统一进入 upload pipeline。未指定分类的图片会进入 `inbox` 系统分类，显示名为“待整理”。v1.4.1 额外规避 NapCat 在群聊中发送 `Reply/At + 本地图片 + 文本` 复合链时的超时问题。
+> v1.4.2 是产品化重构后的分类修正版：QQ 侧收敛为 `/friday`、`/friup`、`/frihelp`，插件配置改为 AstrBot `_conf_schema.json` 分层对象，QQ/Web 上传统一进入 upload pipeline。未指定分类的图片会进入 `inbox` 系统分类，显示名为“待整理”。本版本修复空分类不可见、空分类误报不存在、分类显示名可重复的问题。
 
 ## 功能
 

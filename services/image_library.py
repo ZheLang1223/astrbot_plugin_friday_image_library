@@ -213,6 +213,12 @@ class ImageLibrary:
         if not CATEGORY_INPUT_RE.fullmatch(display_name):
             raise InvalidCategoryName("分类名只能包含中文、英文、数字、下划线或短横线。")
         with self._connect() as conn:
+            duplicate = conn.execute(
+                "SELECT slug FROM categories WHERE display_name = ? AND slug != ? LIMIT 1",
+                (display_name, slug),
+            ).fetchone()
+            if duplicate:
+                raise ImageLibraryError(f"分类显示名已存在：{display_name}")
             conn.execute(
                 "UPDATE categories SET display_name = ? WHERE slug = ?",
                 (display_name, slug),
@@ -261,15 +267,15 @@ class ImageLibrary:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT i.category AS slug,
-                       COALESCE(c.display_name, i.category) AS display_name,
-                       COUNT(*) AS image_count,
+                SELECT c.slug AS slug,
+                       c.display_name AS display_name,
+                       COUNT(i.id) AS image_count,
                        COALESCE(SUM(i.send_count), 0) AS send_count,
                        MAX(i.created_at) AS latest_upload
-                FROM images i
-                LEFT JOIN categories c ON c.slug = i.category
-                GROUP BY i.category
-                ORDER BY i.category
+                FROM categories c
+                LEFT JOIN images i ON i.category = c.slug
+                GROUP BY c.slug, c.display_name
+                ORDER BY c.slug
                 """
             ).fetchall()
         return [
@@ -287,14 +293,15 @@ class ImageLibrary:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT category, COUNT(*) AS image_count
-                FROM images
-                GROUP BY category
-                ORDER BY category
+                SELECT c.display_name AS display_name, COUNT(i.id) AS image_count
+                FROM categories c
+                LEFT JOIN images i ON i.category = c.slug
+                GROUP BY c.slug, c.display_name
+                ORDER BY c.slug
                 """
             ).fetchall()
         return [
-            (self.get_category_display_name(row["category"]), int(row["image_count"]))
+            (row["display_name"], int(row["image_count"]))
             for row in rows
         ]
 
@@ -302,15 +309,15 @@ class ImageLibrary:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT i.category AS slug,
-                       COALESCE(c.display_name, i.category) AS display_name,
-                       COUNT(*) AS image_count,
+                SELECT c.slug AS slug,
+                       c.display_name AS display_name,
+                       COUNT(i.id) AS image_count,
                        COALESCE(SUM(i.send_count), 0) AS send_count,
                        MAX(i.created_at) AS latest_upload
-                FROM images i
-                LEFT JOIN categories c ON c.slug = i.category
-                GROUP BY i.category
-                ORDER BY i.category
+                FROM categories c
+                LEFT JOIN images i ON i.category = c.slug
+                GROUP BY c.slug, c.display_name
+                ORDER BY c.slug
                 """
             ).fetchall()
         return [
@@ -326,20 +333,22 @@ class ImageLibrary:
 
     def stats(self) -> dict[str, object]:
         with self._connect() as conn:
-            row = conn.execute(
+            image_row = conn.execute(
                 """
                 SELECT COUNT(*) AS image_count,
-                       COUNT(DISTINCT category) AS category_count,
                        COALESCE(SUM(send_count), 0) AS send_count,
                        MAX(created_at) AS latest_upload
                 FROM images
                 """
             ).fetchone()
+            category_row = conn.execute(
+                "SELECT COUNT(*) AS category_count FROM categories"
+            ).fetchone()
         return {
-            "image_count": int(row["image_count"] or 0),
-            "category_count": int(row["category_count"] or 0),
-            "send_count": int(row["send_count"] or 0),
-            "latest_upload": row["latest_upload"],
+            "image_count": int(image_row["image_count"] or 0),
+            "category_count": int(category_row["category_count"] or 0),
+            "send_count": int(image_row["send_count"] or 0),
+            "latest_upload": image_row["latest_upload"],
         }
 
     def list_images(
@@ -394,8 +403,13 @@ class ImageLibrary:
     def category_exists(self, category: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM images WHERE category = ? LIMIT 1",
-                (category,),
+                """
+                SELECT 1 FROM categories WHERE slug = ?
+                UNION
+                SELECT 1 FROM images WHERE category = ?
+                LIMIT 1
+                """,
+                (category, category),
             ).fetchone()
         return row is not None
 

@@ -1,7 +1,7 @@
 # Friday 本地图库插件
 
 > [!NOTE]
-> v1.4.0 是产品化重构版本：QQ 侧收敛为 `/friday`、`/friup`、`/frihelp`，插件配置改为 AstrBot `_conf_schema.json` 分层对象，QQ/Web 上传统一进入 upload pipeline。未指定分类的图片会进入 `inbox` 系统分类，显示名为“待整理”。
+> v1.4.1 是产品化重构后的兼容修正版本：QQ 侧收敛为 `/friday`、`/friup`、`/frihelp`，插件配置改为 AstrBot `_conf_schema.json` 分层对象，QQ/Web 上传统一进入 upload pipeline。未指定分类的图片会进入 `inbox` 系统分类，显示名为“待整理”。v1.4.1 额外规避 NapCat 在群聊中发送 `Reply/At + 本地图片 + 文本` 复合链时的超时问题。
 
 ## 功能
 
@@ -146,6 +146,9 @@ flowchart TD
 
 > [!FAILURE]
 > 上传后出现在待整理：这是 v1.4.0 的默认行为。使用 `/friup 分类名` 或 Web 上传分类输入框可直接指定分类。
+
+> [!FAILURE]
+> 群聊发图出现 NapCat `NodeIKernelMsgService/sendMsg` 超时：v1.4.1 起图库 QQ 指令会直接发送消息，并把随机图拆成“图片一条、说明一条”，绕开 AstrBot 全局引用回复和 @ 装饰。若仍失败，继续检查图片大小、QQ 客户端状态和 NapCat 连接。
 
 > [!FAILURE]
 > 敏感图没有旋转：确认图片的 `send_transform` 是 `rotate_180`，并确认 AstrBot 环境已经安装 Pillow。

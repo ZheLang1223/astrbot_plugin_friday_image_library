@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncGenerator
-
-import astrbot.api.message_components as Comp
 from astrbot.api.event import AstrMessageEvent, MessageChain
 
 from .image_library import CategoryNotFound, ImageLibraryError, InvalidCategoryName, NoImagesFound
@@ -20,7 +17,7 @@ class CommandService:
         event: AstrMessageEvent,
         token: str = "",
         count_text: str = "",
-    ) -> AsyncGenerator[object, None]:
+    ) -> None:
         if not self.plugin.is_group_allowed(event):
             return
         category, tag, count = self._parse_random_args(token, count_text)
@@ -34,37 +31,32 @@ class CommandService:
                     session_id=self.plugin.session_id(event),
                 )
             except CategoryNotFound:
-                yield event.plain_result(self.plugin.category_missing_message(category or ""))
+                await self.send_plain(event, self.plugin.category_missing_message(category or ""))
                 return
             except (NoImagesFound, InvalidCategoryName) as exc:
-                yield event.plain_result(str(exc))
+                await self.send_plain(event, str(exc))
                 return
             try:
                 send_path = self.send_path_for_record(record)
             except ImageTransformError as exc:
-                yield event.plain_result(str(exc))
+                await self.send_plain(event, str(exc))
                 return
             library.record_send(record.id, self.plugin.session_id(event))
             record = library.get_image(record.id) or record
-            result = self.combined_image_result(event, send_path, self.plugin.image_info_text(record))
-            if result is not None:
-                yield result
-            else:
-                yield event.image_result(str(send_path))
-                yield event.plain_result(self.plugin.image_info_text(record))
+            await self.send_image_with_text(event, send_path, self.plugin.image_info_text(record))
             sent += 1
         if sent == 0:
-            yield event.plain_result("图库里还没有可发送图片。")
+            await self.send_plain(event, "图库里还没有可发送图片。")
 
     async def upload(
         self,
         event: AstrMessageEvent,
         category: str = "",
-    ) -> AsyncGenerator[object, None]:
+    ) -> None:
         if not self.plugin.is_group_allowed(event):
             return
         if not self.plugin.is_admin(event):
-            yield event.plain_result("仅管理员可上传图片。")
+            await self.send_plain(event, "仅管理员可上传图片。")
             return
         request = UploadRequest(
             category=(category or "").strip() or None,
@@ -73,9 +65,10 @@ class CommandService:
         )
         summary = await self.plugin.upload_pipeline().upload_event(event, request)
         if not summary.records and not summary.failed:
-            yield event.plain_result(
+            await self.send_plain(
+                event,
                 "没有检测到可上传的图片。请发送 /friup 并附带图片，"
-                "或回复一条图片消息后发送该指令。"
+                "或回复一条图片消息后发送该指令。",
             )
             return
         if (
@@ -92,29 +85,30 @@ class CommandService:
         ]
         if summary.failed:
             lines.append("- 失败：" + "；".join(summary.failed[:3]))
-        yield event.plain_result("\n".join(lines))
+        await self.send_plain(event, "\n".join(lines))
 
-    async def categories(self, event: AstrMessageEvent) -> AsyncGenerator[object, None]:
+    async def categories(self, event: AstrMessageEvent) -> None:
         if not self.plugin.is_group_allowed(event):
             return
         categories = self.plugin.require_library().category_stats()
         if not categories:
-            yield event.plain_result("图库还没有分类。可以发送 /friup 并附带图片。")
+            await self.send_plain(event, "图库还没有分类。可以发送 /friup 并附带图片。")
             return
         lines = ["当前图库分类："]
         lines.extend(
             f"- {item['category']}: {item['image_count']} 张，发送 {item['send_count']} 次"
             for item in categories
         )
-        yield event.plain_result("\n".join(lines))
+        await self.send_plain(event, "\n".join(lines))
 
-    async def help(self, event: AstrMessageEvent) -> AsyncGenerator[object, None]:
+    async def help(self, event: AstrMessageEvent) -> None:
         if not self.plugin.is_group_allowed(event):
             return
-        yield event.plain_result(
+        await self.send_plain(
+            event,
             "\n".join(
                 [
-                    "Friday 本地图库 v1.4：",
+                    "Friday 本地图库 v1.4.1：",
                     "/friday - 从全部分类随机发一张",
                     "/friday 分类名 - 从指定分类随机发一张",
                     "/friday #标签 - 从指定标签随机发一张",
@@ -135,14 +129,23 @@ class CommandService:
             )
         return transformed_send_path(record, self.plugin.transform_root())
 
+    async def send_plain(self, event: AstrMessageEvent, text: str) -> None:
+        await event.send(MessageChain().message(text))
+
+    async def send_image_with_text(
+        self,
+        event: AstrMessageEvent,
+        image_path: Path,
+        text: str,
+    ) -> None:
+        # NapCat on macOS can time out on Reply/At + local image + text combined chains.
+        # Direct split sends bypass AstrBot result decoration and keep each OneBot payload small.
+        await event.send(MessageChain().file_image(str(image_path)))
+        if text.strip():
+            await event.send(MessageChain().message(text))
+
     def message_chain(self, image_path: Path, text: str) -> MessageChain:
         return MessageChain().file_image(str(image_path)).message(text)
-
-    def combined_image_result(self, event: AstrMessageEvent, image_path: Path, text: str):
-        try:
-            return event.chain_result([Comp.Image.fromFileSystem(str(image_path)), Comp.Plain(text)])
-        except Exception:
-            return None
 
     def _parse_random_args(self, token: str, count_text: str) -> tuple[str | None, str | None, int]:
         token = (token or "").strip()

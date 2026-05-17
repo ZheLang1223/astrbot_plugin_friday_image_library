@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - compatibility with path-based plugin l
 
 
 PLUGIN_NAME = "astrbot_plugin_friday_image_library"
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 
 @register(PLUGIN_NAME, "zhelang", "QQ 本地图片库随机发送、上传和 Web 管理插件", VERSION)
@@ -62,33 +62,27 @@ class FridayImageLibraryPlugin(Star):
 
     @filter.command("friday")
     async def friday(self, event: AstrMessageEvent, token: str = "", count: str = ""):
-        async for result in self.commands.random_image(event, token, count):
-            yield result
+        await self.commands.random_image(event, token, count)
 
     @filter.command("frione")
     async def random_image_alias(self, event: AstrMessageEvent, token: str = "", count: str = ""):
-        async for result in self.commands.random_image(event, token, count):
-            yield result
+        await self.commands.random_image(event, token, count)
 
     @filter.command("friup")
     async def upload(self, event: AstrMessageEvent, category: str = ""):
-        async for result in self.commands.upload(event, category):
-            yield result
+        await self.commands.upload(event, category)
 
     @filter.command("friupload")
     async def upload_alias(self, event: AstrMessageEvent, category: str = ""):
-        async for result in self.commands.upload(event, category):
-            yield result
+        await self.commands.upload(event, category)
 
     @filter.command("friclass")
     async def categories(self, event: AstrMessageEvent):
-        async for result in self.commands.categories(event):
-            yield result
+        await self.commands.categories(event)
 
     @filter.command("frihelp")
     async def help(self, event: AstrMessageEvent):
-        async for result in self.commands.help(event):
-            yield result
+        await self.commands.help(event)
 
     @filter.command("frischedule")
     async def schedule(self, event: AstrMessageEvent, action: str = "status"):

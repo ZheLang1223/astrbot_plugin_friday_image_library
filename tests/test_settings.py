@@ -57,6 +57,17 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(settings.send.max_batch_count, 3)
         self.assertFalse(settings.schedule.enabled)
 
+    def test_string_booleans_are_parsed_explicitly(self) -> None:
+        settings = load_settings(
+            {
+                "upload": {"upload_receipt": "false"},
+                "schedule": {"enabled": "否"},
+            }
+        )
+
+        self.assertFalse(settings.upload.upload_receipt)
+        self.assertFalse(settings.schedule.enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

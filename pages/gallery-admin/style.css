@@ -53,6 +53,11 @@ button.danger {
   margin-bottom: 16px;
 }
 
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
 h1 {
   font-size: 24px;
   line-height: 1.2;
@@ -378,6 +383,10 @@ dialog::backdrop {
   .toolbar,
   .row {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toolbar-actions {
     flex-direction: column;
   }
 

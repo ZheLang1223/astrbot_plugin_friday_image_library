@@ -107,7 +107,10 @@ def load_settings(config: Any) -> PluginSettings:
                 _nested_get(config, "upload", "max_image_size_mb", 20),
                 20,
             ),
-            upload_receipt=bool(_nested_get(config, "upload", "upload_receipt", True)),
+            upload_receipt=_bool_value(
+                _nested_get(config, "upload", "upload_receipt", True),
+                True,
+            ),
             inbox_category=_string_value(
                 _nested_get(config, "upload", "inbox_category", "inbox"),
                 "inbox",
@@ -124,7 +127,7 @@ def load_settings(config: Any) -> PluginSettings:
             ),
         ),
         schedule=ScheduleSettings(
-            enabled=bool(_nested_get(config, "schedule", "enabled", False)),
+            enabled=_bool_value(_nested_get(config, "schedule", "enabled", False), False),
             cron=_cron_value(_nested_get(config, "schedule", "cron", "0 9 * * *")),
             group_ids=_string_list(_nested_get(config, "schedule", "group_ids", [])),
             category=_optional_string(_nested_get(config, "schedule", "category", "")),
@@ -217,6 +220,21 @@ def _int_value(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bool_value(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on", "是", "启用", "开启"}:
+        return True
+    if text in {"false", "0", "no", "n", "off", "否", "禁用", "关闭"}:
+        return False
+    return default
 
 
 def _cron_value(value: Any) -> str:

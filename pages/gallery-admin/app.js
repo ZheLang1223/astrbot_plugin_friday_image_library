@@ -15,6 +15,7 @@ const state = {
 const els = {
   status: document.getElementById("status"),
   refresh: document.getElementById("refresh"),
+  healthCheck: document.getElementById("health-check"),
   statImages: document.getElementById("stat-images"),
   statCategories: document.getElementById("stat-categories"),
   statSends: document.getElementById("stat-sends"),
@@ -66,29 +67,30 @@ bindEvents();
 await loadAll();
 
 function bindEvents() {
-  els.refresh.addEventListener("click", loadAll);
+  els.refresh.addEventListener("click", () => runAction(loadAll));
+  els.healthCheck.addEventListener("click", () => runAction(runHealthCheck));
   els.search.addEventListener("input", debounce(() => loadImages({ reset: true }), 250));
   els.category.addEventListener("change", () => loadImages({ reset: true }));
   els.safetyStatus.addEventListener("change", () => loadImages({ reset: true }));
   els.filterInbox.addEventListener("click", filterInbox);
   els.closeEditor.addEventListener("click", () => els.editor.close());
-  els.saveEditor.addEventListener("click", saveEditor);
-  els.uploadForm.addEventListener("submit", uploadSelectedFiles);
+  els.saveEditor.addEventListener("click", () => runAction(saveEditor));
+  els.uploadForm.addEventListener("submit", (event) => runAction(() => uploadSelectedFiles(event)));
   els.uploadFile.addEventListener("change", () => {
     const count = els.uploadFile.files.length;
     setStatus(count ? `已选择 ${count} 个文件` : "未选择文件");
   });
   els.dropZone.addEventListener("dragover", onDragOver);
   els.dropZone.addEventListener("dragleave", onDragLeave);
-  els.dropZone.addEventListener("drop", uploadDroppedFiles);
-  els.bulkApply.addEventListener("click", applyBulkUpdate);
-  els.bulkMove.addEventListener("click", moveSelectedCategory);
-  els.bulkTagsApply.addEventListener("click", applyBulkTags);
-  els.bulkDelete.addEventListener("click", deleteSelected);
+  els.dropZone.addEventListener("drop", (event) => runAction(() => uploadDroppedFiles(event)));
+  els.bulkApply.addEventListener("click", () => runAction(applyBulkUpdate));
+  els.bulkMove.addEventListener("click", () => runAction(moveSelectedCategory));
+  els.bulkTagsApply.addEventListener("click", () => runAction(applyBulkTags));
+  els.bulkDelete.addEventListener("click", () => runAction(deleteSelected));
   els.bulkClear.addEventListener("click", clearSelection);
-  els.categoryCreateForm.addEventListener("submit", createCategory);
-  els.categoryRenameForm.addEventListener("submit", renameCategory);
-  els.categoryMergeForm.addEventListener("submit", mergeCategory);
+  els.categoryCreateForm.addEventListener("submit", (event) => runAction(() => createCategory(event)));
+  els.categoryRenameForm.addEventListener("submit", (event) => runAction(() => renameCategory(event)));
+  els.categoryMergeForm.addEventListener("submit", (event) => runAction(() => mergeCategory(event)));
   els.editSafetyStatus.addEventListener("change", () => {
     if (els.editSafetyStatus.value === "sensitive" && els.editSendTransform.value === "none") {
       els.editSendTransform.value = "rotate_180";
@@ -103,6 +105,14 @@ function bindEvents() {
   observer.observe(els.sentinel);
 }
 
+async function runAction(action) {
+  try {
+    await action();
+  } catch (error) {
+    setStatus(error.message || String(error));
+  }
+}
+
 async function loadAll() {
   setStatus("正在加载...");
   try {
@@ -112,6 +122,24 @@ async function loadAll() {
   } catch (error) {
     setStatus(error.message || String(error));
   }
+}
+
+async function runHealthCheck() {
+  setStatus("正在检查图库...");
+  const result = await bridge.apiGet("health");
+  assertOk(result);
+  const health = result.data || {};
+  if (health.ok) {
+    setStatus(`图库健康：正常，已检查 ${health.image_count || 0} 张图片。`);
+    return;
+  }
+  const parts = [
+    ["缺失文件", health.missing_files?.length || 0],
+    ["哈希异常", health.hash_mismatches?.length || 0],
+    ["未知分类", health.unknown_categories?.length || 0],
+    ["孤儿文件", health.orphan_files?.length || 0],
+  ].filter(([, count]) => count > 0);
+  setStatus(`图库健康：发现 ${health.issue_count || 0} 个问题，${parts.map(([label, count]) => `${label} ${count}`).join("，")}。`);
 }
 
 async function loadStats() {

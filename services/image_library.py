@@ -557,6 +557,14 @@ class ImageLibrary:
         record = self.get_image(image_id)
         if record is None:
             raise ImageLibraryError("图片不存在。")
+        if visibility is not None and visibility not in {"public", "hidden"}:
+            raise ImageLibraryError("可见性只支持 public 或 hidden。")
+        if safety_status is not None and safety_status not in SAFETY_STATUSES:
+            raise ImageLibraryError("敏感状态只支持 normal、sensitive 或 hidden。")
+        if visibility is not None and safety_status is not None:
+            expected_visibility = "hidden" if safety_status == "hidden" else "public"
+            if visibility != expected_visibility:
+                raise ImageLibraryError("visibility 与 safety_status 冲突。")
         updates: list[str] = []
         params: list[object] = []
         if title is not None:
@@ -578,8 +586,6 @@ class ImageLibrary:
             updates.append("rating = ?")
             params.append(rating_value)
         if visibility is not None:
-            if visibility not in {"public", "hidden"}:
-                raise ImageLibraryError("可见性只支持 public 或 hidden。")
             updates.append("visibility = ?")
             params.append(visibility)
             if visibility == "hidden":
@@ -589,8 +595,6 @@ class ImageLibrary:
                 updates.append("safety_status = ?")
                 params.append("normal")
         if safety_status is not None:
-            if safety_status not in SAFETY_STATUSES:
-                raise ImageLibraryError("敏感状态只支持 normal、sensitive 或 hidden。")
             updates.append("safety_status = ?")
             params.append(safety_status)
             updates.append("visibility = ?")
@@ -738,6 +742,57 @@ class ImageLibrary:
         if record is None:
             raise ImageLibraryError("图片发送记录写入后无法读取记录。")
         return record
+
+    def health_check(self) -> dict[str, object]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT id, sha256, relative_path, category FROM images").fetchall()
+            categories = {
+                row["slug"] for row in conn.execute("SELECT slug FROM categories").fetchall()
+            }
+
+        missing_files: list[dict[str, str]] = []
+        hash_mismatches: list[dict[str, str]] = []
+        unknown_categories: list[dict[str, str]] = []
+        registered_paths = {str(row["relative_path"]) for row in rows}
+        for row in rows:
+            relative_path = str(row["relative_path"])
+            path = self.library_root / relative_path
+            if str(row["category"]) not in categories:
+                unknown_categories.append({"id": row["id"], "category": row["category"]})
+            if not path.is_file():
+                missing_files.append({"id": row["id"], "relative_path": relative_path})
+                continue
+            actual_sha256 = sha256_file(path)
+            if actual_sha256 != row["sha256"]:
+                hash_mismatches.append(
+                    {
+                        "id": row["id"],
+                        "relative_path": relative_path,
+                        "expected": row["sha256"],
+                        "actual": actual_sha256,
+                    }
+                )
+
+        orphan_files = [
+            path.name
+            for path in self._scan_image_paths()
+            if path.name not in registered_paths
+        ]
+        issue_count = (
+            len(missing_files)
+            + len(hash_mismatches)
+            + len(unknown_categories)
+            + len(orphan_files)
+        )
+        return {
+            "ok": issue_count == 0,
+            "image_count": len(rows),
+            "missing_files": missing_files,
+            "hash_mismatches": hash_mismatches,
+            "unknown_categories": unknown_categories,
+            "orphan_files": orphan_files,
+            "issue_count": issue_count,
+        }
 
     def sync_filesystem(self) -> None:
         with self._connect() as conn:
@@ -911,66 +966,82 @@ class ImageLibrary:
             self._set_schema_version("flat_migration", 1)
             return
         slug_map: dict[str, str] = {}
-        with self._connect() as conn:
-            used_slugs = {
-                row["slug"] for row in conn.execute("SELECT slug FROM categories").fetchall()
-            }
-            for subdir in subdirs:
-                old_name = subdir.name
-                row = conn.execute(
-                    "SELECT slug FROM categories WHERE display_name = ?",
-                    (old_name,),
-                ).fetchone()
-                if row:
-                    slug = row["slug"]
-                else:
-                    slug = _slugify(old_name)
-                    base_slug = slug
-                    counter = 1
-                    while slug in used_slugs or slug in slug_map.values():
-                        slug = f"{base_slug}_{counter}"
-                        counter += 1
-                slug_map[old_name] = slug
-                used_slugs.add(slug)
+        copied_paths: list[Path] = []
+        cleanup_paths: list[Path] = []
+        try:
+            with self._connect() as conn:
+                used_slugs = {
+                    row["slug"] for row in conn.execute("SELECT slug FROM categories").fetchall()
+                }
+                for subdir in subdirs:
+                    old_name = subdir.name
+                    row = conn.execute(
+                        "SELECT slug FROM categories WHERE display_name = ?",
+                        (old_name,),
+                    ).fetchone()
+                    if row:
+                        slug = row["slug"]
+                    else:
+                        slug = _slugify(old_name)
+                        base_slug = slug
+                        counter = 1
+                        while slug in used_slugs or slug in slug_map.values():
+                            slug = f"{base_slug}_{counter}"
+                            counter += 1
+                    slug_map[old_name] = slug
+                    used_slugs.add(slug)
 
-            for old_name, slug in slug_map.items():
-                conn.execute(
-                    "INSERT OR IGNORE INTO categories (slug, display_name, created_at) VALUES (?, ?, ?)",
-                    (slug, old_name, now_iso()),
-                )
-            for old_name, slug in slug_map.items():
-                old_dir = self.library_root / old_name
-                for file_path in old_dir.iterdir():
-                    if (
-                        not file_path.is_file()
-                        or file_path.suffix.lower().lstrip(".") not in self.allowed_extensions
-                    ):
-                        continue
-                    sha256 = sha256_file(file_path)
-                    extension = file_path.suffix.lower().lstrip(".")
-                    if extension == "jpeg":
-                        extension = "jpg"
-                    new_path = self.library_root / file_path.name
-                    if new_path.exists():
-                        new_path = self._unique_target(
-                            self.library_root,
-                            file_path.name,
-                            sha256,
-                            extension,
-                        )
-                    file_path.rename(new_path)
-                    old_relative = f"{old_name}/{file_path.name}"
-                    new_relative = new_path.name
-                    cursor = conn.execute(
-                        "UPDATE images SET relative_path = ?, category = ? WHERE relative_path = ?",
-                        (new_relative, slug, old_relative),
+                for old_name, slug in slug_map.items():
+                    conn.execute(
+                        "INSERT OR IGNORE INTO categories (slug, display_name, created_at) VALUES (?, ?, ?)",
+                        (slug, old_name, now_iso()),
                     )
-                    if cursor.rowcount == 0:
+                for old_name, slug in slug_map.items():
+                    old_dir = self.library_root / old_name
+                    for file_path in old_dir.iterdir():
+                        if (
+                            not file_path.is_file()
+                            or file_path.suffix.lower().lstrip(".") not in self.allowed_extensions
+                        ):
+                            continue
+                        sha256 = sha256_file(file_path)
+                        old_relative = f"{old_name}/{file_path.name}"
+                        existing_old = conn.execute(
+                            "SELECT 1 FROM images WHERE relative_path = ? LIMIT 1",
+                            (old_relative,),
+                        ).fetchone()
                         duplicate = conn.execute(
                             "SELECT 1 FROM images WHERE sha256 = ? LIMIT 1",
                             (sha256,),
                         ).fetchone()
-                        if duplicate is None:
+                        if existing_old is None and duplicate is not None:
+                            cleanup_paths.append(file_path)
+                            continue
+
+                        extension = file_path.suffix.lower().lstrip(".")
+                        if extension == "jpeg":
+                            extension = "jpg"
+                        new_path = self.library_root / file_path.name
+                        if new_path.exists():
+                            if sha256_file(new_path) != sha256:
+                                new_path = self._unique_target(
+                                    self.library_root,
+                                    file_path.name,
+                                    sha256,
+                                    extension,
+                                )
+                                shutil.copy2(file_path, new_path)
+                                copied_paths.append(new_path)
+                        else:
+                            shutil.copy2(file_path, new_path)
+                            copied_paths.append(new_path)
+                        cleanup_paths.append(file_path)
+                        new_relative = new_path.name
+                        cursor = conn.execute(
+                            "UPDATE images SET relative_path = ?, category = ? WHERE relative_path = ?",
+                            (new_relative, slug, old_relative),
+                        )
+                        if cursor.rowcount == 0:
                             self._insert_filesystem_record(
                                 conn,
                                 path=new_path,
@@ -979,17 +1050,32 @@ class ImageLibrary:
                                 extension=extension,
                                 source_session="migration",
                             )
-                conn.execute(
-                    "UPDATE images SET category = ? WHERE category = ?",
-                    (slug, old_name),
-                )
-            for old_name in slug_map:
-                old_dir = self.library_root / old_name
+                    conn.execute(
+                        "UPDATE images SET category = ? WHERE category = ?",
+                        (slug, old_name),
+                    )
+        except Exception:
+            for path in copied_paths:
                 try:
-                    if old_dir.exists() and not any(old_dir.iterdir()):
-                        old_dir.rmdir()
+                    if path.exists():
+                        path.unlink()
                 except OSError:
                     pass
+            raise
+
+        for path in cleanup_paths:
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError:
+                pass
+        for old_name in slug_map:
+            old_dir = self.library_root / old_name
+            try:
+                if old_dir.exists() and not any(old_dir.iterdir()):
+                    old_dir.rmdir()
+            except OSError:
+                pass
         self._ensure_category_rows()
         self._set_schema_version("flat_migration", 1)
 

@@ -65,6 +65,40 @@ class ImageLibraryTest(unittest.TestCase):
             self.assertFalse((library_root / "猫猫" / "same.jpg").exists())
             self.assertTrue(all((library_root / path).is_file() for path in relative_paths))
 
+    def test_flat_migration_cleans_duplicate_old_files_without_orphans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library_root = root / "library"
+            write_image(library_root / "猫猫" / "same.jpg", b"same")
+            write_image(library_root / "狗狗" / "same.jpg", b"same")
+
+            library = self.make_library(root)
+            records = library.list_images(limit=10)
+            health = library.health_check()
+
+            self.assertEqual(len(records), 1)
+            self.assertFalse((library_root / "猫猫" / "same.jpg").exists())
+            self.assertFalse((library_root / "狗狗" / "same.jpg").exists())
+            self.assertTrue(health["ok"])
+            self.assertEqual(health["orphan_files"], [])
+
+    def test_flat_migration_reuses_existing_flat_file_with_same_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library_root = root / "library"
+            write_image(library_root / "same.jpg", b"same")
+            write_image(library_root / "猫猫" / "same.jpg", b"same")
+
+            library = self.make_library(root)
+            records = library.list_images(limit=10)
+            health = library.health_check()
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].relative_path, "same.jpg")
+            self.assertTrue((library_root / "same.jpg").exists())
+            self.assertFalse((library_root / "猫猫" / "same.jpg").exists())
+            self.assertTrue(health["ok"])
+
     def test_delete_image_removes_record_history_and_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -124,6 +158,26 @@ class ImageLibraryTest(unittest.TestCase):
             self.assertEqual(updated.send_transform, "rotate_180")
             with self.assertRaises(ImageLibraryError):
                 library.batch_update_image_info([result.record.id], {"relative_path": "blocked.jpg"})
+
+    def test_update_rejects_conflicting_visibility_and_safety_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.jpg"
+            write_image(source)
+            library = self.make_library(root)
+            result = library.add_image(
+                category="默认",
+                source_path=source,
+                original_name="source.jpg",
+                detected_extension="jpg",
+            )
+
+            with self.assertRaises(ImageLibraryError):
+                library.update_image_info(
+                    result.record.id,
+                    visibility="hidden",
+                    safety_status="normal",
+                )
 
     def test_send_transform_rotates_even_when_safety_status_is_normal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +316,29 @@ class ImageLibraryTest(unittest.TestCase):
             finally:
                 conn.close()
             self.assertEqual(count, 0)
+
+    def test_health_check_reports_missing_and_orphan_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.jpg"
+            orphan = root / "library" / "orphan.jpg"
+            write_image(source)
+            library = self.make_library(root)
+            result = library.add_image(
+                category="默认",
+                source_path=source,
+                original_name="source.jpg",
+                detected_extension="jpg",
+            )
+            result.record.path.unlink()
+            write_image(orphan, b"orphan")
+
+            health = library.health_check()
+
+            self.assertFalse(health["ok"])
+            self.assertEqual(health["issue_count"], 2)
+            self.assertEqual(len(health["missing_files"]), 1)
+            self.assertEqual(health["orphan_files"], ["orphan.jpg"])
 
 
 if __name__ == "__main__":

@@ -108,7 +108,7 @@ class CommandService:
             event,
             "\n".join(
                 [
-                    "Friday 本地图库 v1.4.5：",
+                    "Friday 本地图库 v1.4.6：",
                     "/friday - 从全部分类随机发一张",
                     "/friday 分类名 - 从指定分类随机发一张",
                     "/friday #标签 - 从指定标签随机发一张",
@@ -132,18 +132,6 @@ class CommandService:
     async def send_plain(self, event: AstrMessageEvent, text: str) -> None:
         await event.send(self.text_chain(text))
 
-    async def send_image_with_text(
-        self,
-        event: AstrMessageEvent,
-        image_path: Path,
-        text: str,
-    ) -> None:
-        # NapCat on macOS can time out on Reply/At + local image + text combined chains.
-        # Direct split sends bypass AstrBot result decoration and keep each OneBot payload small.
-        await event.send(self.image_chain(image_path))
-        if text.strip():
-            await event.send(self.text_chain(text))
-
     async def send_image(self, event: AstrMessageEvent, image_path: Path) -> None:
         await event.send(self.image_chain(image_path))
 
@@ -152,9 +140,6 @@ class CommandService:
 
     def text_chain(self, text: str) -> MessageChain:
         return MessageChain().message(text)
-
-    def message_chain(self, image_path: Path, text: str) -> MessageChain:
-        return MessageChain().file_image(str(image_path)).message(text)
 
     def _parse_random_args(self, token: str, count_text: str) -> tuple[str | None, str | None, int]:
         token = (token or "").strip()

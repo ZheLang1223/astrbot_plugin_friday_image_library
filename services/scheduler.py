@@ -175,15 +175,22 @@ class ScheduleService:
                 if ok is False:
                     raise ImageLibraryError("AstrBot 未找到可发送的目标会话。")
                 sent_record = self.plugin.require_library().record_send(record.id, session)
+                sent += 1
                 text = self.plugin.image_info_text(sent_record)
                 if text.strip():
-                    text_ok = await send_message(
-                        session,
-                        self.plugin.commands.text_chain(text),
-                    )
-                    if text_ok is False:
-                        raise ImageLibraryError("AstrBot 未找到可发送的目标会话。")
-                sent += 1
+                    try:
+                        text_ok = await send_message(
+                            session,
+                            self.plugin.commands.text_chain(text),
+                        )
+                        if text_ok is False:
+                            logger.warning(
+                                f"Friday scheduled image info text was not delivered for group {group_id}."
+                            )
+                    except Exception as exc:  # pragma: no cover - adapter/runtime guard
+                        logger.warning(
+                            f"Friday scheduled image info text failed for group {group_id}: {exc}"
+                        )
             except (ImageLibraryError, ImageTransformError, CategoryNotFound, NoImagesFound) as exc:
                 failed.append(f"{group_id}: {exc}")
             except Exception as exc:  # pragma: no cover - adapter/runtime guard

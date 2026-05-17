@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .image_io import ImageExtractionError, safe_filename
-from .image_library import CategoryNotFound, ImageLibraryError
+from .image_library import ImageLibraryError
 from .upload_pipeline import UploadRequest
 
 try:
@@ -29,6 +29,7 @@ class WebApiService:
             return
         routes = [
             ("/stats", self.api_stats, ["GET"], "Friday image library stats"),
+            ("/health", self.api_health, ["GET"], "Friday image library health"),
             ("/images", self.api_images, ["GET"], "Friday image list"),
             ("/categories", self.api_categories, ["GET"], "Friday image categories"),
             ("/inbox/stats", self.api_inbox_stats, ["GET"], "Friday image inbox stats"),
@@ -49,6 +50,9 @@ class WebApiService:
 
     async def api_stats(self):
         return self.json({"ok": True, "data": self.plugin.require_library().stats()})
+
+    async def api_health(self):
+        return self.json({"ok": True, "data": self.plugin.require_library().health_check()})
 
     async def api_categories(self):
         return self.json({"ok": True, "data": self.plugin.require_library().category_stats()})
@@ -133,7 +137,11 @@ class WebApiService:
         data = summary.to_dict()
         if summary.records:
             data["image"] = self.plugin.image_dict(summary.records[-1])
-        return self.json({"ok": not bool(summary.failed and not summary.records), "status": summary.status, "data": data})
+        failed = bool(summary.failed and not summary.records)
+        return self.json(
+            {"ok": not failed, "status": summary.status, "data": data},
+            400 if failed else 200,
+        )
 
     async def api_batch_update(self):
         payload = await self.json_payload()

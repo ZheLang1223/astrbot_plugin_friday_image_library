@@ -391,18 +391,29 @@ async function uploadFiles(files) {
   let saved = 0;
   let duplicates = 0;
   let failed = 0;
+  const failedNames = [];
   for (const [index, file] of files.entries()) {
     setStatus(`正在上传 ${index + 1}/${files.length}...`);
     const endpoint = category ? `upload/${category}` : "upload";
-    const result = await bridge.upload(endpoint, file);
-    assertOk(result);
-    const data = result.data || result;
-    saved += data.saved_count || (data.status === "saved" ? 1 : 0);
-    duplicates += data.duplicate_count || (data.status === "duplicate" ? 1 : 0);
-    failed += data.failed?.length || 0;
+    try {
+      const result = await bridge.upload(endpoint, file);
+      assertOk(result);
+      const data = result.data || result;
+      saved += data.saved_count || (data.status === "saved" ? 1 : 0);
+      duplicates += data.duplicate_count || (data.status === "duplicate" ? 1 : 0);
+      const fileFailures = data.failed?.length || 0;
+      failed += fileFailures;
+      if (fileFailures) {
+        failedNames.push(`${file.name || "upload"}: ${data.failed.join("; ")}`);
+      }
+    } catch (error) {
+      failed += 1;
+      failedNames.push(`${file.name || "upload"}: ${error.message || String(error)}`);
+    }
   }
   await loadAll();
-  setStatus(`上传完成：新增 ${saved} 张，已存在 ${duplicates} 张${failed ? `，失败 ${failed} 张` : ""}`);
+  const failedDetail = failedNames.length ? `。${failedNames.slice(0, 3).join("；")}` : "";
+  setStatus(`上传完成：新增 ${saved} 张，已存在 ${duplicates} 张${failed ? `，失败 ${failed} 张${failedDetail}` : ""}`);
 }
 
 async function createCategory(event) {

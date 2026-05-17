@@ -1,7 +1,7 @@
 # Friday 本地图库插件
 
 > [!NOTE]
-> v1.4.3 是产品化重构后的发送统计修正版：QQ 侧收敛为 `/friday`、`/friup`、`/frihelp`，插件配置改为 AstrBot `_conf_schema.json` 分层对象，QQ/Web 上传统一进入 upload pipeline。未指定分类的图片会进入 `inbox` 系统分类，显示名为“待整理”。本版本修复发送失败仍增加发送次数、污染随机去重窗口的问题。
+> v1.4.4 是产品化重构后的 WebUI 上传优化版：QQ 侧收敛为 `/friday`、`/friup`、`/frihelp`，插件配置改为 AstrBot `_conf_schema.json` 分层对象，QQ/Web 上传统一进入 upload pipeline。未指定分类的图片会进入 `inbox` 系统分类，显示名为“待整理”。本版本优化 WebUI 批量上传，单张失败时继续上传后续文件，并在结果中汇总失败信息。
 
 ## 功能
 

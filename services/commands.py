@@ -41,9 +41,9 @@ class CommandService:
             except ImageTransformError as exc:
                 await self.send_plain(event, str(exc))
                 return
+            await self.send_image(event, send_path)
             library.record_send(record.id, self.plugin.session_id(event))
-            record = library.get_image(record.id) or record
-            await self.send_image_with_text(event, send_path, self.plugin.image_info_text(record))
+            await self.send_plain(event, self.plugin.image_info_text(record))
             sent += 1
         if sent == 0:
             await self.send_plain(event, "图库里还没有可发送图片。")
@@ -108,7 +108,7 @@ class CommandService:
             event,
             "\n".join(
                 [
-                    "Friday 本地图库 v1.4.2：",
+                    "Friday 本地图库 v1.4.3：",
                     "/friday - 从全部分类随机发一张",
                     "/friday 分类名 - 从指定分类随机发一张",
                     "/friday #标签 - 从指定标签随机发一张",
@@ -130,7 +130,7 @@ class CommandService:
         return transformed_send_path(record, self.plugin.transform_root())
 
     async def send_plain(self, event: AstrMessageEvent, text: str) -> None:
-        await event.send(MessageChain().message(text))
+        await event.send(self.text_chain(text))
 
     async def send_image_with_text(
         self,
@@ -140,9 +140,18 @@ class CommandService:
     ) -> None:
         # NapCat on macOS can time out on Reply/At + local image + text combined chains.
         # Direct split sends bypass AstrBot result decoration and keep each OneBot payload small.
-        await event.send(MessageChain().file_image(str(image_path)))
+        await event.send(self.image_chain(image_path))
         if text.strip():
-            await event.send(MessageChain().message(text))
+            await event.send(self.text_chain(text))
+
+    async def send_image(self, event: AstrMessageEvent, image_path: Path) -> None:
+        await event.send(self.image_chain(image_path))
+
+    def image_chain(self, image_path: Path) -> MessageChain:
+        return MessageChain().file_image(str(image_path))
+
+    def text_chain(self, text: str) -> MessageChain:
+        return MessageChain().message(text)
 
     def message_chain(self, image_path: Path, text: str) -> MessageChain:
         return MessageChain().file_image(str(image_path)).message(text)

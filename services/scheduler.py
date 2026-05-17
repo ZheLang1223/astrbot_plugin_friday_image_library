@@ -168,15 +168,18 @@ class ScheduleService:
                     session_id=session,
                 )
                 send_path = self.plugin.commands.send_path_for_record(record)
-                self.plugin.require_library().record_send(record.id, session)
-                record = self.plugin.require_library().get_image(record.id) or record
-                chain = self.plugin.commands.message_chain(send_path, self.plugin.image_info_text(record))
+                text = self.plugin.image_info_text(record)
                 send_message = getattr(self.plugin.context, "send_message", None)
                 if not callable(send_message):
                     raise ImageLibraryError("当前 AstrBot Context 不支持主动发送。")
-                ok = await send_message(session, chain)
+                ok = await send_message(session, self.plugin.commands.image_chain(send_path))
                 if ok is False:
                     raise ImageLibraryError("AstrBot 未找到可发送的目标会话。")
+                self.plugin.require_library().record_send(record.id, session)
+                if text.strip():
+                    text_ok = await send_message(session, self.plugin.commands.text_chain(text))
+                    if text_ok is False:
+                        raise ImageLibraryError("AstrBot 未找到可发送的目标会话。")
                 sent += 1
             except (ImageLibraryError, ImageTransformError, CategoryNotFound, NoImagesFound) as exc:
                 failed.append(f"{group_id}: {exc}")

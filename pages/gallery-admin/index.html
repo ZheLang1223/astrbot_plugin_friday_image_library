@@ -20,7 +20,7 @@
         <div><strong id="stat-images">0</strong><span>图片</span></div>
         <div><strong id="stat-categories">0</strong><span>分类</span></div>
         <div><strong id="stat-sends">0</strong><span>发送</span></div>
-        <div><strong id="stat-latest">-</strong><span>最近上传</span></div>
+        <div><strong id="stat-inbox">0</strong><span>待整理</span></div>
       </section>
 
       <section class="controls" aria-label="筛选和上传">
@@ -32,8 +32,9 @@
           <option value="sensitive">敏感</option>
           <option value="hidden">隐藏</option>
         </select>
+        <button id="filter-inbox" type="button">待整理</button>
         <form id="upload-form" class="upload">
-          <input id="upload-category" type="text" placeholder="上传分类" />
+          <input id="upload-category" type="text" placeholder="上传分类，留空进待整理" />
           <label id="drop-zone" class="drop-zone" for="upload-file">
             <input id="upload-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple />
             <span>拖拽图片到这里，或点击选择</span>
@@ -56,9 +57,39 @@
           <option value="none">不变换</option>
           <option value="rotate_180">旋转 180 度</option>
         </select>
+        <input id="bulk-category" type="text" placeholder="移动到分类" />
+        <button id="bulk-move" type="button">移动</button>
+        <input id="bulk-tags" type="text" placeholder="标签" />
+        <select id="bulk-tag-operation">
+          <option value="add">添加标签</option>
+          <option value="remove">移除标签</option>
+          <option value="set">替换标签</option>
+        </select>
+        <button id="bulk-tags-apply" type="button">标签</button>
         <button id="bulk-apply" type="button">应用</button>
         <button id="bulk-delete" type="button" class="danger">删除</button>
         <button id="bulk-clear" type="button">取消选择</button>
+      </section>
+
+      <section class="category-tools" aria-label="分类管理">
+        <div>
+          <h2>分类管理</h2>
+          <p>分类设置只管理图库内容；插件配置在 AstrBot 插件配置里调整。</p>
+        </div>
+        <form id="category-create-form" class="inline-form">
+          <input id="category-create-name" type="text" placeholder="新分类名称" />
+          <button type="submit">新建</button>
+        </form>
+        <form id="category-rename-form" class="inline-form">
+          <select id="category-rename-source"></select>
+          <input id="category-rename-name" type="text" placeholder="新显示名" />
+          <button type="submit">重命名</button>
+        </form>
+        <form id="category-merge-form" class="inline-form">
+          <select id="category-merge-source"></select>
+          <select id="category-merge-target"></select>
+          <button type="submit">合并</button>
+        </form>
       </section>
 
       <section id="grid" class="grid" aria-label="图片列表"></section>

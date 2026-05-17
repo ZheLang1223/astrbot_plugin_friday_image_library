@@ -149,6 +149,73 @@ class ImageLibraryTest(unittest.TestCase):
             rotated = Image.open(send_path)
             self.assertEqual(rotated.getpixel((2, 4)), (255, 0, 0))
 
+    def test_batch_move_tags_rename_and_merge_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_one = root / "one.jpg"
+            source_two = root / "two.jpg"
+            write_image(source_one, b"one")
+            write_image(source_two, b"two")
+            library = self.make_library(root)
+            first = library.add_image(
+                category="待整理",
+                source_path=source_one,
+                original_name="one.jpg",
+                detected_extension="jpg",
+            )
+            second = library.add_image(
+                category="猫猫",
+                source_path=source_two,
+                original_name="two.jpg",
+                detected_extension="jpg",
+            )
+
+            moved = library.batch_move_category([first.record.id], "猫猫")
+            tagged = library.batch_update_tags(
+                [first.record.id, second.record.id],
+                ["可爱", "精选"],
+                operation="add",
+            )
+            renamed = library.rename_category("猫猫", "猫图")
+            merged = library.merge_categories("待整理", "猫图")
+
+            first_record = library.get_image(first.record.id)
+            second_record = library.get_image(second.record.id)
+            self.assertEqual(moved["updated"], 1)
+            self.assertEqual(tagged["updated"], 2)
+            self.assertEqual(renamed["display_name"], "猫图")
+            self.assertEqual(merged["target"], second_record.category)
+            self.assertIsNotNone(first_record)
+            self.assertIn("精选", first_record.tags)
+            self.assertEqual(library.to_dict(second_record)["category_display_name"], "猫图")
+
+    def test_select_random_supports_exact_tag_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_one = root / "one.jpg"
+            source_two = root / "two.jpg"
+            write_image(source_one, b"one")
+            write_image(source_two, b"two")
+            library = self.make_library(root)
+            first = library.add_image(
+                category="默认",
+                source_path=source_one,
+                original_name="one.jpg",
+                detected_extension="jpg",
+            )
+            second = library.add_image(
+                category="默认",
+                source_path=source_two,
+                original_name="two.jpg",
+                detected_extension="jpg",
+            )
+            library.update_image_info(first.record.id, tags=["cat"])
+            library.update_image_info(second.record.id, tags=["catalog"])
+
+            selected = library.select_random(category=None, tag="cat", session_id="session")
+
+            self.assertEqual(selected.id, first.record.id)
+
 
 if __name__ == "__main__":
     unittest.main()

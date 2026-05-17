@@ -95,7 +95,7 @@ p {
 .controls {
   align-items: stretch;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(140px, 190px) minmax(120px, 160px) minmax(380px, 560px);
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, 190px) minmax(120px, 160px) auto minmax(380px, 560px);
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -105,7 +105,10 @@ p {
 .editor input,
 .editor select,
 .editor textarea,
-.bulk-bar select {
+.bulk-bar select,
+.bulk-bar input,
+.category-tools input,
+.category-tools select {
   border: 1px solid #cfd6e4;
   border-radius: 6px;
   padding: 8px 10px;
@@ -162,6 +165,43 @@ p {
 
 .bulk-bar select {
   max-width: 180px;
+}
+
+.bulk-bar input {
+  max-width: 170px;
+}
+
+.category-tools {
+  align-items: end;
+  background: #ffffff;
+  border: 1px solid #dfe5f0;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 300px) minmax(320px, 420px) minmax(300px, 400px);
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+}
+
+.category-tools h2 {
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+
+.category-tools p {
+  color: #65728a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.inline-form {
+  display: grid;
+  gap: 8px;
+}
+
+.inline-form:nth-of-type(2),
+.inline-form:nth-of-type(3) {
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto;
 }
 
 .grid {
@@ -316,6 +356,10 @@ dialog::backdrop {
     grid-template-columns: 1fr 1fr;
   }
 
+  .category-tools {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .upload {
     grid-column: 1 / -1;
   }
@@ -343,7 +387,14 @@ dialog::backdrop {
     grid-template-columns: 1fr;
   }
 
+  .category-tools,
+  .inline-form:nth-of-type(2),
+  .inline-form:nth-of-type(3) {
+    grid-template-columns: 1fr;
+  }
+
   .bulk-bar select,
+  .bulk-bar input,
   .bulk-bar button {
     flex: 1 1 100%;
     max-width: none;

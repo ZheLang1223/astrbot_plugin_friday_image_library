@@ -133,6 +133,7 @@ class ImageLibrary:
         db_path: Path | str | None = None,
         allowed_extensions: Iterable[str] | str | None = None,
         recent_window: int = 20,
+        default_category: str = "default",
     ) -> None:
         self.library_root = Path(library_root)
         self.library_root.mkdir(parents=True, exist_ok=True)
@@ -140,6 +141,7 @@ class ImageLibrary:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.allowed_extensions = normalize_extensions(allowed_extensions)
         self.recent_window = max(0, int(recent_window or 0))
+        self.default_category = str(default_category or "default").strip() or "default"
         self._init_db()
         self._migrate_to_flat_library()
         self.sync_filesystem()
@@ -195,6 +197,57 @@ class ImageLibrary:
                     "UPDATE categories SET display_name = ? WHERE slug = ?",
                     (display_name, slug),
                 )
+
+    def create_category_from_input(self, category: str) -> dict[str, object]:
+        slug, display_name = self.normalize_category(category)
+        self.create_category(slug, display_name)
+        return {"slug": slug, "display_name": self.get_category_display_name(slug)}
+
+    def rename_category(self, category: str, display_name: str) -> dict[str, object]:
+        slug = self.validate_category_name(category)
+        if not self.category_row_exists(slug):
+            raise CategoryNotFound(f"分类不存在：{category}")
+        display_name = (display_name or "").strip()
+        if not display_name:
+            raise InvalidCategoryName("分类名不能为空。")
+        if not CATEGORY_INPUT_RE.fullmatch(display_name):
+            raise InvalidCategoryName("分类名只能包含中文、英文、数字、下划线或短横线。")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE categories SET display_name = ? WHERE slug = ?",
+                (display_name, slug),
+            )
+        return {"slug": slug, "display_name": display_name}
+
+    def merge_categories(
+        self,
+        source_category: str,
+        target_category: str,
+        *,
+        protected_slugs: set[str] | None = None,
+    ) -> dict[str, object]:
+        source_slug = self.validate_category_name(source_category)
+        target_slug, target_display_name = self.normalize_category(target_category)
+        protected_slugs = protected_slugs or set()
+        if source_slug in protected_slugs:
+            raise ImageLibraryError("系统分类不能被合并删除。")
+        if source_slug == target_slug:
+            raise ImageLibraryError("源分类和目标分类不能相同。")
+        if not self.category_row_exists(source_slug) and not self.category_exists(source_slug):
+            raise CategoryNotFound(f"分类不存在：{source_category}")
+        self.create_category(target_slug, target_display_name)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE images SET category = ?, updated_at = ? WHERE category = ?",
+                (target_slug, now_iso(), source_slug),
+            )
+            moved = int(cursor.rowcount or 0)
+            conn.execute("DELETE FROM categories WHERE slug = ?", (source_slug,))
+        return {
+            "source": source_slug,
+            "target": target_slug,
+            "moved": moved,
+        }
 
     def get_category_display_name(self, slug: str) -> str:
         with self._connect() as conn:
@@ -346,7 +399,30 @@ class ImageLibrary:
             ).fetchone()
         return row is not None
 
-    def select_random(self, *, category: str | None, session_id: str) -> ImageRecord:
+    def category_row_exists(self, category: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM categories WHERE slug = ? LIMIT 1",
+                (category,),
+            ).fetchone()
+        return row is not None
+
+    def category_image_count(self, category: str) -> int:
+        category = self.validate_category_name(category)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS image_count FROM images WHERE category = ?",
+                (category,),
+            ).fetchone()
+        return int(row["image_count"] or 0)
+
+    def select_random(
+        self,
+        *,
+        category: str | None,
+        session_id: str,
+        tag: str | None = None,
+    ) -> ImageRecord:
         where = ["visibility = 'public'", "safety_status != 'hidden'"]
         params: list[object] = []
         if category:
@@ -355,6 +431,11 @@ class ImageLibrary:
                 raise CategoryNotFound(f"分类不存在：{category}")
             where.append("category = ?")
             params.append(category)
+        if tag:
+            tag = str(tag).strip()
+            if tag:
+                where.append("tags_json LIKE ?")
+                params.append(f"%{tag}%")
 
         recent_ids = self._recent_image_ids(session_id)
         recent_set = set(recent_ids)
@@ -365,9 +446,13 @@ class ImageLibrary:
             ).fetchall()
 
         candidates = [self._row_to_record(row) for row in rows]
+        if tag:
+            candidates = [record for record in candidates if tag in record.tags]
         if not candidates:
             if category:
                 raise NoImagesFound(f"分类里还没有可发送图片：{category}")
+            if tag:
+                raise NoImagesFound(f"标签下还没有可发送图片：#{tag}")
             raise NoImagesFound("图库里还没有可发送图片。")
 
         available = [record for record in candidates if record.id not in recent_set]
@@ -542,6 +627,64 @@ class ImageLibrary:
                 failed.append({"id": image_id, "error": str(exc)})
         return {"updated": updated, "failed": failed}
 
+    def batch_move_category(
+        self,
+        image_ids: Iterable[str],
+        category: str,
+    ) -> dict[str, object]:
+        target_slug, display_name = self.normalize_category(category)
+        self.create_category(target_slug, display_name)
+        moved = 0
+        failed: list[dict[str, str]] = []
+        for raw_id in image_ids:
+            image_id = str(raw_id).strip()
+            if not image_id:
+                continue
+            record = self.get_image(image_id)
+            if record is None:
+                failed.append({"id": image_id, "error": "图片不存在。"})
+                continue
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE images SET category = ?, updated_at = ? WHERE id = ?",
+                    (target_slug, now_iso(), record.id),
+                )
+            moved += 1
+        return {"moved": moved, "updated": moved, "failed": failed, "category": target_slug}
+
+    def batch_update_tags(
+        self,
+        image_ids: Iterable[str],
+        tags: Iterable[str] | str,
+        *,
+        operation: str,
+    ) -> dict[str, object]:
+        incoming = normalize_tags(tags)
+        if not incoming:
+            raise ImageLibraryError("缺少标签。")
+        if operation not in {"add", "remove", "set"}:
+            raise ImageLibraryError("标签操作只支持 add、remove 或 set。")
+        updated = 0
+        failed: list[dict[str, str]] = []
+        for raw_id in image_ids:
+            image_id = str(raw_id).strip()
+            if not image_id:
+                continue
+            record = self.get_image(image_id)
+            if record is None:
+                failed.append({"id": image_id, "error": "图片不存在。"})
+                continue
+            if operation == "set":
+                next_tags = incoming
+            elif operation == "add":
+                next_tags = normalize_tags([*record.tags, *incoming])
+            else:
+                remove_set = set(incoming)
+                next_tags = [tag for tag in record.tags if tag not in remove_set]
+            self.update_image_info(record.id, tags=next_tags)
+            updated += 1
+        return {"updated": updated, "failed": failed}
+
     def delete_image(self, image_id: str) -> ImageRecord:
         record = self.get_image(image_id)
         if record is None:
@@ -584,8 +727,8 @@ class ImageLibrary:
             if sha256 in existing_ids:
                 continue
             relative_path = path.name
-            category = self._config_get_default_category()
-            self.create_category(category, category)
+            category, display_name = self.normalize_category(self._config_get_default_category())
+            self.create_category(category, display_name)
             extension = path.suffix.lower().lstrip(".")
             if extension == "jpeg":
                 extension = "jpg"
@@ -617,7 +760,7 @@ class ImageLibrary:
                 )
 
     def _config_get_default_category(self) -> str:
-        return "default"
+        return self.default_category
 
     def to_dict(self, record: ImageRecord) -> dict[str, object]:
         display_name = self.get_category_display_name(record.category)

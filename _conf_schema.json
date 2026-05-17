@@ -1,68 +1,176 @@
 {
+  "basic": {
+    "description": "基础设置",
+    "type": "object",
+    "items": {
+      "default_category": {
+        "description": "默认分类名",
+        "type": "string",
+        "default": "默认",
+        "hint": "保留给兼容场景使用；QQ /friup 未填写分类时会进入 upload.inbox_category。"
+      }
+    }
+  },
+  "permission": {
+    "description": "权限设置",
+    "type": "object",
+    "items": {
+      "allowed_group_ids": {
+        "description": "允许使用图库指令的群号列表",
+        "type": "list",
+        "default": [],
+        "hint": "仅列表中的群可以使用 /friday 等指令。留空表示所有群都允许。"
+      },
+      "admin_qq_numbers": {
+        "description": "管理员 QQ 号列表",
+        "type": "list",
+        "default": [],
+        "hint": "管理员可上传图片和管理定时发图。留空表示不限制。"
+      }
+    }
+  },
+  "upload": {
+    "description": "上传设置",
+    "type": "object",
+    "items": {
+      "allowed_extensions": {
+        "description": "允许的图片格式",
+        "type": "list",
+        "default": ["jpg", "jpeg", "png", "gif", "webp"],
+        "hint": "仅填写扩展名，不需要点号。"
+      },
+      "max_image_size_mb": {
+        "description": "单张图片大小上限 MB",
+        "type": "int",
+        "default": 20,
+        "hint": "上传超过此大小的图片会被拒绝。"
+      },
+      "upload_receipt": {
+        "description": "上传后发送回执",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后，上传成功时不额外回复；错误和重复仍会提示。"
+      },
+      "inbox_category": {
+        "description": "待整理分类 slug",
+        "type": "string",
+        "default": "inbox",
+        "hint": "QQ 或 Web 上传未填写分类时进入该分类；默认显示名为“待整理”。"
+      }
+    }
+  },
+  "send": {
+    "description": "发送设置",
+    "type": "object",
+    "items": {
+      "recent_window": {
+        "description": "会话内随机去重窗口",
+        "type": "int",
+        "default": 20,
+        "hint": "同一个群或私聊最近发送过的图片会优先避开；设为 0 表示纯随机。"
+      },
+      "max_batch_count": {
+        "description": "单次随机最多发送张数",
+        "type": "int",
+        "default": 3,
+        "hint": "/friday 分类 数量 的上限，避免刷屏。"
+      }
+    }
+  },
+  "schedule": {
+    "description": "定时发图",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用定时发图",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后按 cron 向 group_ids 中已绑定的群发送随机图片。"
+      },
+      "cron": {
+        "description": "定时发图 Cron",
+        "type": "string",
+        "default": "0 9 * * *",
+        "hint": "使用 5 段 crontab 表达式，默认每天 09:00，时区为 Asia/Shanghai。"
+      },
+      "group_ids": {
+        "description": "定时发图群号列表",
+        "type": "list",
+        "default": [],
+        "hint": "填写目标 QQ 群号。每个目标群还需要管理员在群内执行 /frischedule bind 绑定会话。"
+      },
+      "category": {
+        "description": "定时发图分类",
+        "type": "string",
+        "default": "",
+        "hint": "留空表示从全部分类随机发送；可填写中文显示名或英文 slug。"
+      }
+    }
+  },
   "default_category": {
-    "description": "默认分类名",
+    "description": "旧版默认分类名",
     "type": "string",
     "default": "默认",
-    "hint": "用户上传时不填写分类，或需要兜底分类时使用。"
+    "invisible": true
   },
   "allowed_extensions": {
-    "description": "允许的图片格式",
+    "description": "旧版允许图片格式",
     "type": "list",
     "default": ["jpg", "jpeg", "png", "gif", "webp"],
-    "hint": "仅填写扩展名，不需要点号。"
+    "invisible": true
   },
   "max_image_size_mb": {
-    "description": "单张图片大小上限 MB",
+    "description": "旧版图片大小上限",
     "type": "int",
     "default": 20,
-    "hint": "上传超过此大小的图片会被拒绝。"
+    "invisible": true
   },
   "recent_window": {
-    "description": "会话内随机去重窗口",
+    "description": "旧版随机去重窗口",
     "type": "int",
     "default": 20,
-    "hint": "同一个群或私聊最近发送过的图片会优先避开；设为 0 表示纯随机。"
+    "invisible": true
   },
   "upload_receipt": {
-    "description": "上传后发送回执",
+    "description": "旧版上传回执",
     "type": "bool",
     "default": true,
-    "hint": "关闭后，上传成功时不额外回复；错误和重复仍会提示。"
+    "invisible": true
   },
   "allowed_group_ids": {
-    "description": "允许使用图库指令的群号列表",
+    "description": "旧版允许群号",
     "type": "list",
     "default": [],
-    "hint": "仅列表中的群可以使用 /friday 等指令。留空表示所有群都允许。"
+    "invisible": true
   },
   "admin_qq_numbers": {
-    "description": "管理员 QQ 号列表",
+    "description": "旧版管理员 QQ",
     "type": "list",
     "default": [],
-    "hint": "管理员可上传图片和管理定时发图。留空表示不限制。"
+    "invisible": true
   },
   "scheduled_send_enabled": {
-    "description": "启用定时发图",
+    "description": "旧版定时开关",
     "type": "bool",
     "default": false,
-    "hint": "开启后按 scheduled_send_cron 向 scheduled_send_group_ids 中已绑定的群发送随机图片。"
+    "invisible": true
   },
   "scheduled_send_cron": {
-    "description": "定时发图 Cron",
+    "description": "旧版定时 Cron",
     "type": "string",
     "default": "0 9 * * *",
-    "hint": "使用 5 段 crontab 表达式，默认每天 09:00，时区为 Asia/Shanghai。"
+    "invisible": true
   },
   "scheduled_send_group_ids": {
-    "description": "定时发图群号列表",
+    "description": "旧版定时群号",
     "type": "list",
     "default": [],
-    "hint": "填写目标 QQ 群号。每个目标群还需要管理员在群内执行 /frischedule bind 绑定会话。"
+    "invisible": true
   },
   "scheduled_send_category": {
-    "description": "定时发图分类",
+    "description": "旧版定时分类",
     "type": "string",
     "default": "",
-    "hint": "留空表示从全部分类随机发送；可填写中文显示名或英文 slug。"
+    "invisible": true
   }
 }

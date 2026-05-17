@@ -18,10 +18,11 @@ const els = {
   statImages: document.getElementById("stat-images"),
   statCategories: document.getElementById("stat-categories"),
   statSends: document.getElementById("stat-sends"),
-  statLatest: document.getElementById("stat-latest"),
+  statInbox: document.getElementById("stat-inbox"),
   search: document.getElementById("search"),
   category: document.getElementById("category"),
   safetyStatus: document.getElementById("safety-status"),
+  filterInbox: document.getElementById("filter-inbox"),
   grid: document.getElementById("grid"),
   sentinel: document.getElementById("sentinel"),
   uploadForm: document.getElementById("upload-form"),
@@ -32,9 +33,22 @@ const els = {
   selectedCount: document.getElementById("selected-count"),
   bulkSafetyStatus: document.getElementById("bulk-safety-status"),
   bulkSendTransform: document.getElementById("bulk-send-transform"),
+  bulkCategory: document.getElementById("bulk-category"),
+  bulkMove: document.getElementById("bulk-move"),
+  bulkTags: document.getElementById("bulk-tags"),
+  bulkTagOperation: document.getElementById("bulk-tag-operation"),
+  bulkTagsApply: document.getElementById("bulk-tags-apply"),
   bulkApply: document.getElementById("bulk-apply"),
   bulkDelete: document.getElementById("bulk-delete"),
   bulkClear: document.getElementById("bulk-clear"),
+  categoryCreateForm: document.getElementById("category-create-form"),
+  categoryCreateName: document.getElementById("category-create-name"),
+  categoryRenameForm: document.getElementById("category-rename-form"),
+  categoryRenameSource: document.getElementById("category-rename-source"),
+  categoryRenameName: document.getElementById("category-rename-name"),
+  categoryMergeForm: document.getElementById("category-merge-form"),
+  categoryMergeSource: document.getElementById("category-merge-source"),
+  categoryMergeTarget: document.getElementById("category-merge-target"),
   editor: document.getElementById("editor"),
   closeEditor: document.getElementById("close-editor"),
   saveEditor: document.getElementById("save-editor"),
@@ -56,6 +70,7 @@ function bindEvents() {
   els.search.addEventListener("input", debounce(() => loadImages({ reset: true }), 250));
   els.category.addEventListener("change", () => loadImages({ reset: true }));
   els.safetyStatus.addEventListener("change", () => loadImages({ reset: true }));
+  els.filterInbox.addEventListener("click", filterInbox);
   els.closeEditor.addEventListener("click", () => els.editor.close());
   els.saveEditor.addEventListener("click", saveEditor);
   els.uploadForm.addEventListener("submit", uploadSelectedFiles);
@@ -67,8 +82,13 @@ function bindEvents() {
   els.dropZone.addEventListener("dragleave", onDragLeave);
   els.dropZone.addEventListener("drop", uploadDroppedFiles);
   els.bulkApply.addEventListener("click", applyBulkUpdate);
+  els.bulkMove.addEventListener("click", moveSelectedCategory);
+  els.bulkTagsApply.addEventListener("click", applyBulkTags);
   els.bulkDelete.addEventListener("click", deleteSelected);
   els.bulkClear.addEventListener("click", clearSelection);
+  els.categoryCreateForm.addEventListener("submit", createCategory);
+  els.categoryRenameForm.addEventListener("submit", renameCategory);
+  els.categoryMergeForm.addEventListener("submit", mergeCategory);
   els.editSafetyStatus.addEventListener("change", () => {
     if (els.editSafetyStatus.value === "sensitive" && els.editSendTransform.value === "none") {
       els.editSendTransform.value = "rotate_180";
@@ -95,13 +115,17 @@ async function loadAll() {
 }
 
 async function loadStats() {
-  const result = await bridge.apiGet("stats");
-  assertOk(result);
-  const stats = result.data;
+  const [statsResult, inboxResult] = await Promise.all([
+    bridge.apiGet("stats"),
+    bridge.apiGet("inbox/stats"),
+  ]);
+  assertOk(statsResult);
+  assertOk(inboxResult);
+  const stats = statsResult.data;
   els.statImages.textContent = stats.image_count ?? 0;
   els.statCategories.textContent = stats.category_count ?? 0;
   els.statSends.textContent = stats.send_count ?? 0;
-  els.statLatest.textContent = formatDate(stats.latest_upload);
+  els.statInbox.textContent = inboxResult.data?.count ?? 0;
 }
 
 async function loadCategories() {
@@ -117,6 +141,32 @@ async function loadCategories() {
     els.category.appendChild(option);
   }
   els.category.value = current;
+  renderCategorySelects();
+}
+
+function renderCategorySelects() {
+  const selects = [
+    els.categoryRenameSource,
+    els.categoryMergeSource,
+    els.categoryMergeTarget,
+  ];
+  for (const select of selects) {
+    const current = select.value;
+    select.innerHTML = "";
+    for (const item of state.categories) {
+      const option = document.createElement("option");
+      option.value = item.slug || item.category;
+      option.textContent = `${item.category} (${item.image_count})`;
+      select.appendChild(option);
+    }
+    select.value = current;
+  }
+}
+
+function filterInbox() {
+  const inbox = state.categories.find((item) => item.slug === "inbox");
+  els.category.value = inbox ? "inbox" : "inbox";
+  loadImages({ reset: true });
 }
 
 async function loadImages({ reset = false } = {}) {
@@ -235,6 +285,42 @@ async function applyBulkUpdate() {
   setStatus(`已更新 ${result.data.updated || 0} 张${failed ? `，失败 ${failed} 张` : ""}`);
 }
 
+async function moveSelectedCategory() {
+  const category = els.bulkCategory.value.trim();
+  if (!category) {
+    setStatus("请输入目标分类。");
+    return;
+  }
+  setStatus("正在移动分类...");
+  const result = await bridge.apiPost("image/batch-move-category", {
+    ids: Array.from(state.selected),
+    category,
+  });
+  assertOk(result);
+  await Promise.all([loadStats(), loadCategories()]);
+  await loadImages({ reset: true });
+  const failed = result.data.failed?.length || 0;
+  setStatus(`已移动 ${result.data.updated || 0} 张${failed ? `，失败 ${failed} 张` : ""}`);
+}
+
+async function applyBulkTags() {
+  const tags = splitTags(els.bulkTags.value);
+  if (!tags.length) {
+    setStatus("请输入标签。");
+    return;
+  }
+  setStatus("正在批量处理标签...");
+  const result = await bridge.apiPost("image/batch-tags", {
+    ids: Array.from(state.selected),
+    tags,
+    operation: els.bulkTagOperation.value,
+  });
+  assertOk(result);
+  await loadImages({ reset: true });
+  const failed = result.data.failed?.length || 0;
+  setStatus(`已处理 ${result.data.updated || 0} 张${failed ? `，失败 ${failed} 张` : ""}`);
+}
+
 async function deleteSelected() {
   if (!window.confirm(`确认删除 ${state.selected.size} 张图片？`)) {
     return;
@@ -301,21 +387,76 @@ async function uploadFiles(files) {
     setStatus("请选择要上传的图片。");
     return;
   }
-  const category = encodeURIComponent((els.uploadCategory.value || "默认").trim());
+  const category = encodeURIComponent(els.uploadCategory.value.trim());
   let saved = 0;
   let duplicates = 0;
+  let failed = 0;
   for (const [index, file] of files.entries()) {
     setStatus(`正在上传 ${index + 1}/${files.length}...`);
-    const result = await bridge.upload(`upload/${category}`, file);
+    const endpoint = category ? `upload/${category}` : "upload";
+    const result = await bridge.upload(endpoint, file);
     assertOk(result);
-    if (result.status === "duplicate") {
-      duplicates += 1;
-    } else {
-      saved += 1;
-    }
+    const data = result.data || result;
+    saved += data.saved_count || (data.status === "saved" ? 1 : 0);
+    duplicates += data.duplicate_count || (data.status === "duplicate" ? 1 : 0);
+    failed += data.failed?.length || 0;
   }
   await loadAll();
-  setStatus(`上传完成：新增 ${saved} 张，已存在 ${duplicates} 张`);
+  setStatus(`上传完成：新增 ${saved} 张，已存在 ${duplicates} 张${failed ? `，失败 ${failed} 张` : ""}`);
+}
+
+async function createCategory(event) {
+  event.preventDefault();
+  const category = els.categoryCreateName.value.trim();
+  if (!category) {
+    setStatus("请输入分类名称。");
+    return;
+  }
+  const result = await bridge.apiPost("category/create", { category });
+  assertOk(result);
+  els.categoryCreateName.value = "";
+  await Promise.all([loadStats(), loadCategories()]);
+  setStatus("分类已创建");
+}
+
+async function renameCategory(event) {
+  event.preventDefault();
+  const category = els.categoryRenameSource.value;
+  const displayName = els.categoryRenameName.value.trim();
+  if (!category || !displayName) {
+    setStatus("请选择分类并输入新显示名。");
+    return;
+  }
+  const result = await bridge.apiPost("category/rename", {
+    category,
+    display_name: displayName,
+  });
+  assertOk(result);
+  els.categoryRenameName.value = "";
+  await Promise.all([loadStats(), loadCategories()]);
+  await loadImages({ reset: true });
+  setStatus("分类已重命名");
+}
+
+async function mergeCategory(event) {
+  event.preventDefault();
+  const source = els.categoryMergeSource.value;
+  const target = els.categoryMergeTarget.value;
+  if (!source || !target || source === target) {
+    setStatus("请选择两个不同分类。");
+    return;
+  }
+  if (!window.confirm("确认合并分类？源分类会被移除。")) {
+    return;
+  }
+  const result = await bridge.apiPost("category/merge", {
+    source_category: source,
+    target_category: target,
+  });
+  assertOk(result);
+  await Promise.all([loadStats(), loadCategories()]);
+  await loadImages({ reset: true });
+  setStatus(`已合并 ${result.data.moved || 0} 张图片`);
 }
 
 function onDragOver(event) {

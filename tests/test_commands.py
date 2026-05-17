@@ -54,6 +54,7 @@ class FakeRecord:
     short_id: str = "image-id"
     safety_status: str = "normal"
     send_transform: str = "none"
+    send_count: int = 0
 
 
 class FakeLibrary:
@@ -64,8 +65,10 @@ class FakeLibrary:
     def select_random(self, *, category, tag, session_id):
         return self.record
 
-    def record_send(self, image_id: str, session_id: str) -> None:
+    def record_send(self, image_id: str, session_id: str) -> FakeRecord:
         self.recorded.append((image_id, session_id))
+        self.record = FakeRecord(send_count=self.record.send_count + 1)
+        return self.record
 
 
 class FakePlugin:
@@ -73,6 +76,7 @@ class FakePlugin:
         self.library = library
         self.image_path = image_path
         self.settings = FakeSettings(send=FakeSendSettings())
+        self.info_records: list[FakeRecord] = []
 
     def is_group_allowed(self, event) -> bool:
         return True
@@ -84,7 +88,8 @@ class FakePlugin:
         return "session"
 
     def image_info_text(self, record) -> str:
-        return "info"
+        self.info_records.append(record)
+        return f"发送次数：{record.send_count}"
 
     def transform_root(self) -> Path:
         return self.image_path.parent
@@ -115,6 +120,7 @@ class CommandServiceTest(unittest.IsolatedAsyncioTestCase):
             await service.random_image(FakeEvent())
 
             self.assertEqual(library.recorded, [(record.id, "session")])
+            self.assertEqual(plugin.info_records[-1].send_count, 1)
 
     async def test_random_image_does_not_record_when_image_send_fails(self) -> None:
         with TemporaryDirectory() as tmp:

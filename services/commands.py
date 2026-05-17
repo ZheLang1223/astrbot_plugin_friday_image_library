@@ -42,8 +42,8 @@ class CommandService:
                 await self.send_plain(event, str(exc))
                 return
             await self.send_image(event, send_path)
-            library.record_send(record.id, self.plugin.session_id(event))
-            await self.send_plain(event, self.plugin.image_info_text(record))
+            sent_record = library.record_send(record.id, self.plugin.session_id(event))
+            await self.send_plain(event, self.plugin.image_info_text(sent_record))
             sent += 1
         if sent == 0:
             await self.send_plain(event, "图库里还没有可发送图片。")
@@ -108,7 +108,7 @@ class CommandService:
             event,
             "\n".join(
                 [
-                    "Friday 本地图库 v1.4.4：",
+                    "Friday 本地图库 v1.4.5：",
                     "/friday - 从全部分类随机发一张",
                     "/friday 分类名 - 从指定分类随机发一张",
                     "/friday #标签 - 从指定标签随机发一张",

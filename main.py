@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - compatibility with path-based plugin l
 
 
 PLUGIN_NAME = "astrbot_plugin_friday_image_library"
-VERSION = "1.4.4"
+VERSION = "1.4.5"
 
 
 @register(PLUGIN_NAME, "zhelang", "QQ 本地图片库随机发送、上传和 Web 管理插件", VERSION)

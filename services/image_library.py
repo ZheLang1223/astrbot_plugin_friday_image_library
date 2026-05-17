@@ -715,10 +715,10 @@ class ImageLibrary:
             path.unlink()
         return record
 
-    def record_send(self, image_id: str, session_id: str) -> None:
+    def record_send(self, image_id: str, session_id: str) -> ImageRecord:
         timestamp = now_iso()
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE images
                 SET send_count = send_count + 1,
@@ -728,10 +728,16 @@ class ImageLibrary:
                 """,
                 (timestamp, timestamp, image_id),
             )
+            if cursor.rowcount == 0:
+                raise ImageLibraryError("图片不存在。")
             conn.execute(
                 "INSERT INTO send_history (image_id, session_id, sent_at) VALUES (?, ?, ?)",
                 (image_id, session_id or "global", timestamp),
             )
+        record = self.get_image(image_id)
+        if record is None:
+            raise ImageLibraryError("图片发送记录写入后无法读取记录。")
+        return record
 
     def sync_filesystem(self) -> None:
         with self._connect() as conn:

@@ -78,8 +78,10 @@ class ImageLibraryTest(unittest.TestCase):
                 detected_extension="jpg",
             )
             library.record_send(result.record.id, "session")
+            sent_record = library.record_send(result.record.id, "session")
             image_path = result.record.path
 
+            self.assertEqual(sent_record.send_count, 2)
             deleted = library.delete_image(result.record.id)
 
             self.assertEqual(deleted.id, result.record.id)
@@ -245,6 +247,21 @@ class ImageLibraryTest(unittest.TestCase):
 
             with self.assertRaises(ImageLibraryError):
                 library.rename_category("狗狗", "猫猫")
+
+    def test_record_send_rejects_missing_image_without_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = self.make_library(root)
+
+            with self.assertRaises(ImageLibraryError):
+                library.record_send("missing", "session")
+
+            conn = sqlite3.connect(root / "friday_images.sqlite3")
+            try:
+                count = conn.execute("SELECT COUNT(*) FROM send_history").fetchone()[0]
+            finally:
+                conn.close()
+            self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":
